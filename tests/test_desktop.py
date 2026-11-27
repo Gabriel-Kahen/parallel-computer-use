@@ -13,6 +13,7 @@ import unittest
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 from parallel_computer_use.desktop import (
     DesktopError, DesktopSession, _auth_record, _environment, _X11, validate_native_argv,
@@ -130,6 +131,58 @@ class DesktopBoundaryTest(unittest.TestCase):
         with DelayedEditor(width=320, height=240) as desk:
             frame = self.png_rows(desk.png(), 320, 240)
             self.assertGreater(frame[16][32 * 3:48 * 3].count(b"\x17\x17\x17"), 8)
+
+    @unittest.skipUnless(shutil.which("chromium") or shutil.which("chromium-browser") or
+                         Path("/opt/google/chrome/chrome").exists(), "requires Chromium")
+    def test_browser_element_refs_revalidate_identity_inside_the_same_window(self):
+        page = """<!doctype html><title>Opening catalog</title><h1>Local catalog</h1>
+          <button autofocus>Apply</button><p>Unchanged</p><script>
+          const button = () => document.querySelector('button');
+          document.addEventListener('keydown', event => {
+            if (event.key === 'x') {
+              button().replaceWith(button().cloneNode(true));
+              document.querySelector('p').textContent = 'Replaced';
+            }
+          });
+          let clicks = 0;
+          document.addEventListener('click', event => {
+            if (event.target === button() && event.isTrusted)
+              document.querySelector('p').textContent = 'Clicked ' + ++clicks;
+          });
+          requestAnimationFrame(() => requestAnimationFrame(() => document.title = 'Local catalog'));
+          </script>"""
+        with patch("parallel_computer_use.desktop._CATALOG", page):
+            with DesktopSession("browser", width=800, height=600, browser_observer=True) as desk:
+                original = desk.browser_state()
+                self.assertIn("[e1]", original["text"])
+                focus = desk.observation()["focus"]
+                before = desk.png()
+                desk.apply({"type": "key", "key": "x"})
+                self.wait_until(lambda: desk.png() != before)
+                self.assertEqual(desk.observation()["focus"], focus)
+                self.assertFalse(desk.browser_click(original["revision"], "e1"))
+                current = desk.browser_state()
+                self.assertIn("Replaced", current["text"])
+                self.assertTrue(desk.browser_click(current["revision"], "e1"))
+                self.assertFalse(desk.browser_click(current["revision"], "e1"))
+                self.assertIn("Clicked 1", desk.browser_state()["text"])
+
+    @unittest.skipUnless(shutil.which("chromium") or shutil.which("chromium-browser") or
+                         Path("/opt/google/chrome/chrome").exists(), "requires Chromium")
+    def test_browser_canvas_hit_check_rejects_transparent_overlay_inside_crop(self):
+        page = """<!doctype html><title>Opening catalog</title><canvas width=400 height=200></canvas>
+          <aside style="position:fixed; left:40px; top:40px; width:20px; height:20px; opacity:0"></aside>
+          <p role=status>Ready</p><script>
+          requestAnimationFrame(() => requestAnimationFrame(() => document.title = 'Local catalog'));
+          </script>"""
+        with patch("parallel_computer_use.desktop._CATALOG", page):
+            with DesktopSession("browser", width=800, height=600, browser_observer=True) as desk:
+                state = desk.browser_state()
+                region = desk.browser_crop_region(state)
+                self.assertIsNotNone(region)
+                x, y, *_ = state["viewport"]
+                self.assertTrue(desk.browser_canvas_contains(state, [(x + 100, y + 100)]))
+                self.assertFalse(desk.browser_canvas_contains(state, [(x + 50, y + 50)]))
 
     def test_conditional_capture_uses_the_supplied_digest_and_refreshes_on_change(self):
         with DesktopSession(width=640, height=480) as desk:

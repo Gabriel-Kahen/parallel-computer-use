@@ -43,7 +43,7 @@ class Connection:
         x11 = C.CDLL("libX11.so.6")
         xtst = C.CDLL("libXtst.so.6")
         display, uint, win, integer = C.c_void_p, C.c_uint, C.c_ulong, C.c_int
-        iref = C.POINTER(integer)
+        iref, uref = C.POINTER(integer), C.POINTER(uint)
         self.open = bind(x11, "XOpenDisplay", display, C.c_char_p)
         self.close = bind(x11, "XCloseDisplay", integer, display)
         self.sync = bind(x11, "XSync", integer, display, integer)
@@ -63,6 +63,10 @@ class Connection:
                                   C.POINTER(win), C.POINTER(win), iref, iref, iref,
                                   iref, C.POINTER(uint))
         self.get_focus = bind(x11, "XGetInputFocus", integer, display, C.POINTER(win), iref)
+        self.get_geometry = bind(x11, "XGetGeometry", integer, display, win, C.POINTER(win), iref, iref,
+                                 uref, uref, uref, uref)
+        self.translate = bind(x11, "XTranslateCoordinates", integer, display, win, win, integer, integer,
+                              iref, iref, C.POINTER(win))
         self.selection_owner = bind(x11, "XGetSelectionOwner", win, display, win)
         intern_atom = bind(x11, "XInternAtom", win, display, C.c_char_p, integer)
         self.get_property = bind(x11, "XGetWindowProperty", integer, display, win, win,
@@ -138,6 +142,24 @@ class Connection:
         finally:
             if contents:
                 self.free(contents)
+
+    def focused_geometry(self):
+        window = self.active()
+        focus, revert = C.c_ulong(), C.c_int()
+        self.get_focus(self.display, C.byref(focus), C.byref(revert))
+        if window in (0, 1, self.root) or focus.value != window:
+            return None
+        root, child = C.c_ulong(), C.c_ulong()
+        x, y = C.c_int(), C.c_int()
+        width, height, border, depth = (C.c_uint() for _ in range(4))
+        if not self.get_geometry(self.display, window, C.byref(root), C.byref(x), C.byref(y),
+                                 C.byref(width), C.byref(height), C.byref(border), C.byref(depth)):
+            return None
+        if root.value != self.root or not self.translate(self.display, window, self.root, 0, 0,
+                                                        C.byref(x), C.byref(y), C.byref(child)):
+            return None
+        return {"window": window, "viewport": [x.value, y.value, width.value, height.value],
+                "root": [self.width, self.height]}
 
     def editor_ready(self, foreground):
         # Nano paints an inverse-video title bar on the first terminal row.
@@ -287,6 +309,8 @@ def dispatch(connection, operation, action=None):
         return b"1" if connection.editor_ready(action) else b"0"
     if operation == "catalog-ready":
         return b"1" if connection.catalog_ready() else b"0"
+    if operation == "focused-geometry":
+        return json.dumps(connection.focused_geometry()).encode("ascii")
     if operation == "apply":
         connection.apply(action)
         return b""

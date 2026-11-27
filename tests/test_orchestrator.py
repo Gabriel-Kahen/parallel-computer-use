@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from parallel_computer_use.orchestrator import Job, Orchestrator, RequestError, Run, TERMINAL
-from parallel_computer_use.providers import DecisionUsage
+from parallel_computer_use.providers import DecisionUsage, ProviderResponseError
 from parallel_computer_use.store import Store
 
 
@@ -415,6 +415,174 @@ class OrchestratorTest(unittest.TestCase):
         self.assertEqual(job.model_usage["input_tokens"], 1600)
         self.assertEqual(job.model_usage["output_tokens"], 65)
         self.assertEqual(job.model_usage["cached_tokens"], 197)
+
+    def test_semantic_worker_switches_to_pixels_when_it_needs_visual_evidence(self):
+        class MissingVisual(GateProvider):
+            def decide_with_usage(self, prompt, image, cancel, *, directives):
+                self.images.append(image)
+                self.prompts.append(prompt)
+                if len(self.images) == 1:
+                    self.directives = directives
+                    return {"type": "visual"}, DecisionUsage()
+                if len(self.images) == 2:
+                    raise ProviderResponseError("Invalid first image response")
+                return {"type": "done", "result": "Read the visual result"}, DecisionUsage()
+
+        state = {"text": "h1 Canvas example", "visual": True, "count": 0, "revision": 19}
+        provider = MissingVisual()
+        with patch.object(FakeDesktop, "browser_state", return_value=state, create=True):
+            app = self.build({"local": provider}, observation_mode="semantic")
+            run = app.start_run({"prompt": "Read the drawn canvas", "template": "browser", "observe_only": True})
+            job = app.runs[run].jobs[0]
+            self.wait_for(lambda: job.status == "completed")
+        self.assertEqual(provider.images, [None, b"frame:0", b"frame:0"])
+        self.assertIn("visual", provider.directives)
+        self.assertNotIn("click_ref", provider.directives)
+        self.assertIn("Canvas example", provider.prompts[0])
+        self.assertEqual(job.model_usage["visual_fallbacks"], 2)
+
+    def test_browser_ref_cannot_dispatch_after_focus_changes(self):
+        class DelayedRef(GateProvider):
+            def decide(self, prompt, image, cancel):
+                self.prompts.append(prompt)
+                if len(self.prompts) == 1:
+                    self.entered.set()
+                    self.release.wait(3)
+                    return {"type": "click_ref", "target": "e1"}
+                return {"type": "done", "result": "Observed again"}
+
+        state = {"text": "button Apply [e1]", "visual": False, "count": 1, "revision": 19}
+        provider = DelayedRef()
+        with (patch.object(FakeDesktop, "browser_state", return_value=state, create=True),
+              patch.object(FakeDesktop, "browser_click", return_value=True, create=True) as click):
+            app = self.build({"local": provider}, observation_mode="hybrid")
+            run = app.start_run({"prompt": "Click Apply", "template": "browser"})
+            self.assertTrue(provider.entered.wait(3))
+            self.desktops[0].focus = 40
+            provider.release.set()
+            self.wait_for(lambda: app.runs[run].status == "completed")
+            click.assert_not_called()
+        self.assertIn("Browser element changed", provider.prompts[-1])
+
+    def test_browser_ref_cannot_dispatch_after_cancel_during_the_focus_check(self):
+        class ReferenceProvider(GateProvider):
+            def decide(self, prompt, image, cancel):
+                return {"type": "click_ref", "target": "e1"}
+
+        entered, release = threading.Event(), threading.Event()
+        state = {"text": "button Apply [e1]", "visual": False, "count": 1, "revision": 19}
+        normal_observation = FakeDesktop.observation
+
+        def hold_observation(desktop):
+            if not hasattr(desktop, "observed"):
+                desktop.observed = True
+            else:
+                entered.set()
+                release.wait(3)
+            return normal_observation(desktop)
+
+        with (patch.object(FakeDesktop, "observation", hold_observation),
+              patch.object(FakeDesktop, "browser_state", return_value=state, create=True),
+              patch.object(FakeDesktop, "browser_click", return_value=True, create=True) as click):
+            app = self.build({"local": ReferenceProvider()}, observation_mode="semantic")
+            run = app.start_run({"prompt": "Click Apply", "template": "browser"})
+            try:
+                self.assertTrue(entered.wait(3))
+                app.cancel_run(run)
+            finally:
+                release.set()
+            self.wait_for(lambda: app.runs[run].jobs[0].status == "cancelled")
+            click.assert_not_called()
+
+    def test_changed_status_requires_verification_before_more_input(self):
+        class ReferenceProvider(GateProvider):
+            def decide_with_usage(self, prompt, image, cancel, *, directives):
+                self.prompts.append(prompt)
+                if len(self.prompts) == 1:
+                    return {"type": "click_ref", "target": "e1"}, DecisionUsage()
+                self.verify_directives = directives
+                return {"type": "done", "result": "Applied"}, DecisionUsage()
+
+        def state(desktop):
+            status = "Applied" if desktop.actions else "Ready"
+            return {"text": f"button Apply [e1]\np {status}", "count": 1, "revision": 19,
+                    "visual": False, "status": status}
+
+        def click(desktop, revision, target):
+            desktop.actions.append(target)
+            return True
+
+        provider = ReferenceProvider()
+        with (patch.object(FakeDesktop, "browser_state", state, create=True),
+              patch.object(FakeDesktop, "browser_click", click, create=True)):
+            app = self.build({"local": provider}, observation_mode="hybrid")
+            run = app.start_run({"prompt": "Click Apply once", "template": "browser"})
+            self.wait_for(lambda: app.runs[run].jobs[0].status == "completed")
+        self.assertEqual(self.desktops[0].actions, ["e1"])
+        self.assertIn("continue", provider.verify_directives)
+        self.assertNotIn("click_ref", provider.verify_directives)
+        self.assertIn("After input, the application shows this status: Applied", provider.prompts[1])
+
+    def test_unacknowledged_browser_click_requires_verification_without_status(self):
+        class ReferenceProvider(GateProvider):
+            def decide(self, prompt, image, cancel):
+                self.prompts.append(prompt)
+                if len(self.prompts) <= 2:
+                    return {"type": "click_ref", "target": "e1"}
+                return {"type": "done", "result": "Inspected"}
+
+        state = {"text": "button Apply [e1]", "visual": False, "count": 1, "revision": 19}
+        provider = ReferenceProvider()
+        with (patch.object(FakeDesktop, "browser_state", return_value=state, create=True),
+              patch.object(FakeDesktop, "browser_click", return_value=None, create=True) as click):
+            app = self.build({"local": provider}, observation_mode="semantic")
+            run = app.start_run({"prompt": "Click Apply once", "template": "browser"})
+            self.wait_for(lambda: app.runs[run].status == "completed")
+            click.assert_called_once()
+        self.assertIn("previous click may have taken effect", provider.prompts[1])
+        self.assertIn("Verify the new application status", provider.prompts[-1])
+
+    def test_targeted_click_reobserves_the_full_screen_when_canvas_pixels_change(self):
+        class PointProvider(GateProvider):
+            def decide(self, prompt, image, cancel):
+                self.images.append(image)
+                self.prompts.append(prompt)
+                if len(self.images) < 3:
+                    return {"type": "click", "x": 10, "y": 20}
+                return {"type": "done", "result": "Inspected"}
+
+        state = {"text": "h1 Drawing", "visual": True, "count": 0, "revision": 19}
+        provider = PointProvider()
+        with (patch.object(FakeDesktop, "browser_state", return_value=state, create=True),
+              patch.object(FakeDesktop, "browser_crop_region", return_value=(100, 100, 300, 200), create=True),
+              patch.object(FakeDesktop, "png_region", side_effect=[b"old crop", b"changed crop"])):
+            app = self.build({"local": provider}, observation_mode="targeted")
+            run = app.start_run({"prompt": "Click in the canvas", "template": "browser"})
+            self.wait_for(lambda: app.runs[run].jobs[0].status == "completed")
+        self.assertEqual(provider.images, [b"old crop", b"frame:0", b"frame:1"])
+        self.assertEqual(self.desktops[0].actions, [{"type": "click", "x": 10, "y": 20, "button": 1}])
+        self.assertIn("canvas changed", provider.prompts[1])
+
+    def test_targeted_click_requires_verification_if_status_changes_outside_the_crop(self):
+        class PointProvider(GateProvider):
+            def decide(self, prompt, image, cancel):
+                self.images.append(image)
+                self.prompts.append(prompt)
+                if len(self.images) == 1:
+                    return {"type": "click", "x": 10, "y": 20}
+                return {"type": "done", "result": "Already applied"}
+
+        ready = {"text": "p Ready", "status": "Ready", "visual": True, "count": 0, "revision": 19}
+        applied = {**ready, "text": "p Already applied", "status": "Already applied", "revision": 20}
+        provider = PointProvider()
+        with (patch.object(FakeDesktop, "browser_state", side_effect=[ready, applied, applied], create=True),
+              patch.object(FakeDesktop, "browser_crop_region", return_value=(100, 100, 300, 200), create=True)):
+            app = self.build({"local": provider}, observation_mode="targeted")
+            run = app.start_run({"prompt": "Apply once", "template": "browser"})
+            self.wait_for(lambda: app.runs[run].jobs[0].status == "completed")
+        self.assertEqual(provider.images, [b"crop", None])
+        self.assertEqual(self.desktops[0].actions, [])
+        self.assertIn("After input, the application shows this status: Already applied", provider.prompts[-1])
 
     def test_nested_zoom_is_rejected_and_reobserves_overview(self):
         class RepeatZoomProvider(GateProvider):

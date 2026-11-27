@@ -230,6 +230,78 @@ The browser result favors a scoped semantic driver for routine navigation, extra
 
 For Linux desktop apps, make the private AT-SPI observer optional and scope it to the active or focused section. Keep pixels ready for canvas, custom widgets, terminal UIs, and visual judgments. OCR can help when a label has no semantic representation, with a measurable processing cost on each invocation. In a separate CPU probe, Chrome accessibility extraction read the exact price list at 9 px where OCR missed it. OCR read the canvas-only price that the accessibility tree could not expose. If a short, validated action sequence reaches a known postcondition, execute the sequence and verify its effect before asking the model again.
 
+### Additional upstream implementations
+
+Nine browser implementations each selected the correct Shipping button on five fixture reloads with two DOM orders. Six also captured an image and successfully clicked the canvas control using a fixture-selected point. The actions were checked against page state. Browser observations and actions below are warm script-wall medians over five runs. The canvas checks were single observations. Each API has its own waiting and serialization behavior, so these timings describe the tested paths.
+
+| Implementation | Observation time and size | Verified Shipping click | Canvas check |
+| --- | ---: | ---: | --- |
+| [Vercel agent-browser 0.45.0](https://github.com/vercel-labs/agent-browser/releases/tag/v0.45.0) | 14.57 ms / 8,814 B | 15.94 ms | Pixels and click |
+| [Puppeteer 25.19.0](https://github.com/puppeteer/puppeteer/releases/tag/puppeteer-v25.19.0) | 21.09 ms / 11,503 B | 56.27 ms | Pixels and click |
+| [Selenium 4.49.0](https://github.com/SeleniumHQ/selenium/releases/tag/selenium-4.49.0) | 22.60 ms / 3,335 B | 46.96 ms | Pixels and click |
+| [Chrome DevTools MCP 1.14.0](https://github.com/ChromeDevTools/chrome-devtools-mcp) | 15.74 ms / 4,609 B | 237.94 ms | Pixels and click |
+| [Cavaldos agent-browser-use 0.1.2](https://github.com/cavaldos/agent-browser-use/releases/tag/v0.1.2) | 1.49 ms / 4,660 B | 181.84 ms | Pixels and click |
+| [Moli 1.1.28](https://github.com/lexmount/moli/releases/tag/v1.1.28) | 5.53 ms / 10,570 B | 75.62 ms | Click passed, text placement differed from Chrome |
+| [Lightpanda 1.0.5](https://github.com/lightpanda-io/browser/releases/tag/1.0.5) | 0.35 ms / 4,001 B | 0.38 ms | Text-layout screenshot omitted painted controls |
+| [Kitewright MCP 0.1.4](https://github.com/kitewright/kitewright) | 14.27 ms / 13,267 B | 72.12 ms | Screenshot captured |
+| [Archived Puppeteer MCP 2025.5.12](https://github.com/modelcontextprotocol/servers-archived/tree/main/src/puppeteer) | 9.60 ms / 3,337 B | 61.17 ms | Screenshot captured |
+
+Agent-browser's interactive-only view shrank to 229 B and omitted the section headings needed for that task. Keep the label and its local context together. Lightpanda's speed makes it a candidate for a separately qualified extraction worker. Chromium provides the visual behavior and live preview this workstation needs. Bruster v0.3.6 initialized after staging WebKitGTK in a private Xvfb test and exited before listing tools. BrowserMCP and anomalyco browse were reviewed through their extension-pairing documentation. [Agent-browser source](https://github.com/vercel-labs/agent-browser) · [Lightpanda](https://github.com/lightpanda-io/browser) · [Bruster release](https://github.com/aliilyas/bruster/releases/tag/v0.3.6)
+
+Private Xvfb and D-Bus tests also verified these native approaches. Each action path produced five exact GUI effects, measured from a GTK receipt or saved file. Timings use the four warm samples and include the runtime boundary indicated.
+
+| Implementation | Action and observed time |
+| --- | --- |
+| [Dogtail 2.1.2](https://gitlab.com/dogtail/dogtail) | Named accessibility click, 3 ms lookup and 55 ms through receipt including 50 ms configured backoff |
+| [desktop-agent-ops `e72c743`](https://github.com/appergb/desktop-agent-ops/tree/e72c743910b94bc5b7e215bbcc5dcdb17445592f) | Accessibility lookup 97 ms, canvas OCR click 1.50 s, moved image-template click 840 ms |
+| [LinuxComputerUse `7e0cde8`](https://github.com/wieslawsoltes/LinuxComputerUse/tree/7e0cde8fcc2d928d53e0953fd0b6624ab19e6aab) | Image observation 157 ms, coordinate and keyboard save 414 ms through file verification |
+| [OSWorld guest `0ad41be`](https://github.com/xlang-ai/OSWorld/blob/0ad41bee56565efe7bb3c3a5ebc67590a1b8276f/desktop_env/server/main.py) | Image 18 ms, accessibility 113 ms, PyAutoGUI action via Flask test client 237 ms through file verification |
+| [OculiX 4.0.0](https://github.com/oculix-org/Oculix/releases/tag/v4.0.0) | Known icon after moving the window, 1.75 ms locate and 63 ms through click verification in a warm JVM |
+
+OculiX demonstrates the value of a known template for repeated, visually stable workflows. A generic model still needs semantic context or pixels to discover an unfamiliar control. The desktop-agent-ops hybrid resolver dropped an exact accessibility match because its eight-node tree fell below a ten-node threshold. Choose fallbacks based on the evidence for the target. A fixed minimum tree size can discard a good match. OSWorld's accessibility endpoint needed LibreOffice in the test environment, while screenshot and input routes worked independently.
+
+The `NuCl34R/linux-computer-use` workstation at `26f5059` passed its 13 live GUI and eight spectator checks in owned Xvfb. Median capture was 30 ms and action-to-verified-frame was 67 ms. The spectator continued to display changing GTK frames during a drag. The tests confirmed stale-reference rejection and process cleanup, and Python logged a cleanup warning. Its isolated native mode keeps the caller's filesystem and network permissions. Chatuse at `8742101` passed 23 Linux unit tests. Its live helper opened scratch Xvfb and refused screenshot capture because the private display had no active unlocked logind seat. [Workstation](https://github.com/NuCl34R/linux-computer-use/tree/26f5059d62fcdc3601f9b66b3ff0e7fd48970c5f) · [Chatuse Linux backend](https://github.com/fazakis/chatuse/tree/8742101746273b1c31a57be386e7a77e3b3bad98/linux)
+
+### Observer experiments in the worker app
+
+`serve --observation-mode` selects `pixels`, `ocr`, `semantic`, `hybrid`, or `targeted`. The semantic driver uses a guest-owned Chromium DevTools pipe and sends bounded visible text and references through the worker's private control channel. It supports the bundled offline catalog in an ephemeral Chromium profile. References are tied to the observed document generation and target identity, and the broker checks desktop ownership, focus and current target actionability at dispatch. OCR is optional and uses one Tesseract thread for local read-only work. The dashboard displays the private X11 desktop in every mode.
+
+Semantic mode can ask for pixels if its observation is incomplete. Hybrid mode proactively includes a screenshot for a visible canvas or large SVG. A changed semantic status after input routes the next turn through verification, with an explicit `continue` response for further work. This lets a canvas action use pixels and its text confirmation use a text-only turn. The `--model-pointer-units` setting fixes the visual coordinate contract for the local model.
+
+Targeted mode adds an automatic crop for one prominent visible canvas. Chromium and the focused X11 window must agree on origin, scale and viewport geometry. Before applying crop-relative input, the broker rechecks the mapping and the cropped pixels. A changed region, detected occlusion, multiple prominent canvases, or uncertain geometry falls back to the full screen. The native 690 × 230 crop matched the corresponding full-frame pixels exactly and reduced the fixture PNG from 30,593 to 11,663 bytes.
+
+The guest checks a shared request deadline before starting a click. If Chromium accepts input and acknowledgment stalls, the outcome is uncertain. The worker takes a fresh observation and gates further input behind verification. An action acknowledgment covers dispatch, and a fixture receipt tests its effect. The semantic-input RPC briefly holds the broker's ownership lock, with a bounded deadline. This experiment uses the exact offline document and a single foreground page.
+
+The benchmark runs through normal worker scheduling in real Bubblewrap, Xvfb, Chromium or Nano. Browser action fixtures emit one synthetic receipt per input and ask the model to report visible confirmation. Editor fixtures check the returned code and the preserved file bytes. Screenshots in the results count images delivered to the model. Desktop previews and repaint checks can capture separate images.
+
+Early Inkling runs all read the catalog correctly. A screenshot used 497 input tokens, OCR 193, and the browser observer 191. The early interactive cases failed the exact-effect and answer check across all four modes. Inkling sometimes mixed coordinate units and sometimes clicked successfully more than once. The follow-up fixed the pixel coordinate convention and added verification after native browser status changes. It ran two layouts each for duplicate-button selection, a canvas click and a multistep inventory filter, with one warm V100 model slot and prompt caching disabled.
+
+| In-app route | Exact effect | Exact effect and reply | Model images | Input tokens | Median worker time |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Pixels | 3/6 | 2/6 | 29 | 21,323 | 30.10 s |
+| Semantic with on-demand visual fallback | 6/6 | 6/6 | 2 | 5,462 | 14.31 s |
+| Hybrid with proactive full screenshot | 6/6 | 6/6 | 4 | 6,750 | 12.60 s |
+
+The pixel route produced a correct canvas effect once with extra text around the requested confirmation. The hybrid route spent two extra model turns requesting a full-frame zoom on the second canvas layout. Both semantic and hybrid needed 16 model calls across all six trials. The hybrid total wall time was 81.5 s and the semantic total was 83.6 s. These small offline fixtures compare complete observation and action policies, including semantic verification where available.
+
+Both canvas layouts also passed a paired full-frame hybrid versus targeted test. Across the pair, targeted used four model calls, two images and 1,856 input tokens. Full-frame hybrid used six calls, four images and 3,906 input tokens. Median worker time was 13.81 s for targeted and 16.77 s for hybrid. One fresh text observation verified each click. After adding a pointer hit test and a stale-status check, the targeted route passed again on a prior layout and on a canvas shifted down and right. Each final run used one image, two calls and 928 input tokens. The short results favor bounded semantic observations, a trusted crop when its geometry is known, and a full-frame fallback for the rest.
+
+Two concurrent hybrid Chromium workers on a two-slot V100 server completed both Shipping jobs in 15.52 s. Each returned the exact confirmation, produced one separate receipt, and used two text-only model requests. The broker recorded two active requests, both displays were distinct, and both closed afterward.
+
+On two read-only Nano workers, OCR returned the exact seven-digit code both times, used 415 input tokens total, and preserved both files byte for byte. The screenshot route used 974 input tokens and met the exact format once. Its other reply contained the correct digits with a label. OCR preparation took 343–370 ms per worker. X11 capture took about 7 ms. Median total worker times were 5.49 s for OCR and 5.99 s for pixels in this small sample.
+
+```sh
+python -m scripts.compare_worker_observers --check --seeds 1
+python -m scripts.compare_worker_observers --mode pixels semantic hybrid --task shipping canvas filter \
+  --seeds 1 2 --timeout 32 --turn-limit 6 --no-cache --pointer-units pixels \
+  --server /path/to/llama-server --gguf /path/to/model.gguf --projector /path/to/mmproj.gguf
+python -m scripts.compare_worker_observers --mode pixels ocr --task editor_read --seeds 1 2 --no-cache \
+  --server /path/to/llama-server --gguf /path/to/model.gguf --projector /path/to/mmproj.gguf
+python -m scripts.compare_worker_observers --mode hybrid targeted --task canvas --seeds 1 2 \
+  --timeout 32 --turn-limit 6 --no-cache --pointer-units pixels \
+  --server /path/to/llama-server --gguf /path/to/model.gguf --projector /path/to/mmproj.gguf
+```
+
 ### Inkling 2 Mini on the V100
 
 An isolated CUDA test used Inkling 2 Mini IQ4_NL, its Q8_0 vision projector, and llama.cpp b12600 at 29b52d398. The server had two 6,144-token slots and occupied about 19 GiB of device memory shortly after startup, including the card's 623 MiB starting usage. A fresh server took about 32 s to become ready. [Inkling model card](https://huggingface.co/thinkingmachines/Inkling-2-Mini) · [GGUF and vision projector](https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF)

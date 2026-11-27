@@ -30,7 +30,7 @@ _PNG = b"\x89PNG\r\n\x1a\n"
 _T = TypeVar("_T")
 _DIRECTIVE_TYPES = (
     "plan", "click", "drag", "move", "scroll", "key", "type",
-    "wait", "message", "handoff", "done", "blocked", "batch", "zoom", "overview",
+    "wait", "message", "handoff", "done", "blocked", "batch", "zoom", "overview", "visual", "click_ref", "continue",
 )
 _DIRECTIVE_SCHEMA = {
     "type": "object",

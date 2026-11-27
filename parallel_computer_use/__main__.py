@@ -20,7 +20,7 @@ from pathlib import Path
 from .codex_auth import CodexAuth, CodexAuthError
 from .control import ControlSocket, send
 from .model_process import ManagedModel
-from .orchestrator import Orchestrator, TEMPLATES
+from .orchestrator import BROWSER_OBSERVATION_MODES, OBSERVATION_MODES, Orchestrator, TEMPLATES
 from .providers import CodexProvider, GeminiProvider, LlamaProvider, ProviderError
 from .server import LocalServer
 from .store import Store
@@ -311,13 +311,15 @@ def serve(args):
             if browser_profile:
                 options["browser_profile"] = profile_root / browser_profile
             return DesktopSession(template, mode=args.desktop_mode, workspace=workspace,
-                                  width=args.width, height=args.height, **options)
+                                  width=args.width, height=args.height,
+                                  browser_observer=args.observation_mode in BROWSER_OBSERVATION_MODES, **options)
 
         app = Orchestrator(directory, create_desktop, providers, demo=args.demo,
                            sessions=args.sessions, inference=args.inference_slots,
                            max_workers=args.max_workers, network_domains=network_domains,
                            validate_browser_url=network_validator, notify=notifications.offer,
                            templates=templates, browser_profiles=profiles,
+                           observation_mode=args.observation_mode, model_pointer_units=args.model_pointer_units,
                            memory_floor=args.memory_reserve_mib * 1024 * 1024)
         try:
             with LocalServer(app, args.port) as server:
@@ -408,6 +410,10 @@ def main(argv=None):
     server.add_argument("--codex-model", default=app_environment("CODEX_MODEL"))
     server.add_argument("--codex-account", default=app_environment("CODEX_ACCOUNT"))
     server.add_argument("--desktop-mode", choices=("sandbox", "host-private"), default="sandbox")
+    server.add_argument("--observation-mode", choices=OBSERVATION_MODES, default="pixels",
+                        help="Opt-in local observer experiment. Browser observers cover the offline Chromium catalog.")
+    server.add_argument("--model-pointer-units", choices=("pixels", "normalized"),
+                        help="Fix the coordinate convention for local model pointer actions.")
     server.add_argument("--allow-domain", action="append", default=[],
                         help="Permit an exact hostname in opt-in browser jobs. May be repeated.")
     server.add_argument("--native-executable", help="Add one trusted X11 application from /usr/bin.")

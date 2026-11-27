@@ -29,6 +29,7 @@ _PATH = "/usr/bin:/bin"
 _SPAWN = Path(__file__).with_name("_spawn.py").resolve()
 _X11 = Path(__file__).with_name("_x11.py").resolve()
 _NETWORK = Path(__file__).with_name("_network.py").resolve()
+_BROWSER = Path(__file__).with_name("_browser.py").resolve()
 _CHROME = Path("/opt/google/chrome/chrome")
 _EDITOR_FOREGROUND = "#171717"
 _I3_CONFIG = """font pango:monospace 9
@@ -149,7 +150,7 @@ class DesktopSession:
 
     def __init__(self, template="editor", *, width=1024, height=768, mode="sandbox",
                  workspace=None, allowed_domains=(), start_url=None, native_argv=None,
-                 browser_profile=None):
+                 browser_profile=None, browser_observer=False):
         if template not in TEMPLATES:
             raise ValueError("Unknown desktop template")
         if mode not in MODES:
@@ -178,6 +179,11 @@ class DesktopSession:
         self._closed = False
         self._display_process = self._app_process = self._clipboard = None
         self._x11 = None
+        self._browser_channel = None
+        self._browser_request_id = 0
+        self._browser_pending = bytearray()
+        self._browser_observer = (browser_observer and template == "browser" and mode == "sandbox"
+                                  and start_url is None and browser_profile is None)
         self._network_proxy = None
         self._browser_profile = None
         self._workspace_fd = None
@@ -231,7 +237,7 @@ class DesktopSession:
     def authority(self):
         return self._auth
 
-    def _guard(self, command, environment, cwd, *, inherited=None, cleanup=None, custody=None):
+    def _guard(self, command, environment, cwd, *, inherited=None, cleanup=None, custody=None, channel=None):
         reader, writer = os.pipe()
         arguments = [sys.executable, "-I", str(_SPAWN), "guard", str(reader),
                      str(inherited) if inherited is not None else "-",
@@ -239,8 +245,9 @@ class DesktopSession:
                      str(custody) if custody is not None else "-", *map(str, command)]
         try:
             process = subprocess.Popen(
-                arguments, env=environment, cwd=cwd, stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                arguments, env=environment, cwd=cwd,
+                stdin=channel if channel is not None else subprocess.DEVNULL,
+                stdout=channel if channel is not None else subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 pass_fds=tuple(fd for fd in (reader, inherited, custody) if fd is not None),
                 start_new_session=True,
             )
@@ -319,12 +326,10 @@ class DesktopSession:
         url = self.start_url or (home / "catalog.html").as_uri()
         engine = self._browser_profile.engine if self._browser_profile is not None else None
         firefox = shutil.which("firefox", path=_PATH) or shutil.which("firefox-esr", path=_PATH)
+        chromium = shutil.which("chromium", path=_PATH) or shutil.which("chromium-browser", path=_PATH)
+        if chromium is None and os.access(_CHROME, os.X_OK):
+            chromium = str(_CHROME)
         if engine == "chromium" or (firefox is None and engine != "firefox"):
-            chromium = (
-                shutil.which("chromium", path=_PATH) or shutil.which("chromium-browser", path=_PATH)
-            )
-            if chromium is None and os.access(_CHROME, os.X_OK):
-                chromium = str(_CHROME)
             if chromium is None:
                 raise DesktopError("Install the required Firefox or Chromium browser")
             self._profile_engine("chromium")
@@ -342,9 +347,12 @@ class DesktopSession:
                     "--proxy-bypass-list=<-loopback>", "--disable-http2", "--disable-quic",
                     "--disable-features=EncryptedClientHello", "--start-maximized", url,
                 ]
+            if self._browser_observer:
+                arguments = [_binary("python3"), "-I", "/opt/pcu/_browser.py", url, *arguments]
             return arguments, browser_files
         if firefox is None:
             raise DesktopError("This browser profile requires Firefox")
+        self._browser_observer = False
         self._profile_engine("firefox")
         settings = {"network.proxy.type": 0}
         if self._network_proxy is not None:
@@ -410,8 +418,15 @@ class DesktopSession:
         else:
             command = [*bus, _SPAWN, "guest", wm, network_port, *app]
         custody = self._browser_profile.lock if self._browser_profile is not None else None
-        self._app_process = self._guard(command, environment, self._root if sandbox else workspace,
-                                        custody=custody)
+        channel = None
+        if self._browser_observer:
+            self._browser_channel, channel = socket.socketpair()
+        try:
+            self._app_process = self._guard(command, environment, self._root if sandbox else workspace,
+                                            custody=custody, channel=channel)
+        finally:
+            if channel is not None:
+                channel.close()
         deadline = time.monotonic() + (12 if self.template == "browser" else 5)
         while time.monotonic() < deadline and self.alive:
             observation = self._observe()
@@ -466,6 +481,8 @@ class DesktopSession:
             command += ["--ro-bind", path, "/etc/" + name]
         if browser_files is not None:
             command += ["--ro-bind", browser_files, browser_files]
+        if self._browser_observer:
+            command += ["--ro-bind", _BROWSER, "/opt/pcu/_browser.py"]
         if self._browser_profile is not None:
             command += ["--bind", self._browser_profile.data, "/home/worker/browser"]
         if self._network_proxy is not None:
@@ -564,6 +581,85 @@ class DesktopSession:
     def observation(self):
         with self._lock:
             return self._observe()
+
+    def browser_state(self):
+        state = self._browser_request("observe")
+        if (isinstance(state, dict) and isinstance(state.get("text"), str) and len(state["text"]) <= 6400
+                and type(state.get("revision")) is int and type(state.get("count")) is int
+                and type(state.get("visual")) is bool and isinstance(state.get("status"), str)
+                and len(state["status"]) <= 160):
+            return state
+        return None
+
+    def browser_click(self, revision, target):
+        result = self._browser_request("click", revision, target)
+        return result if type(result) is bool else None
+
+    def browser_crop_region(self, state):
+        """Map one canvas to root pixels when Chromium and X11 agree exactly."""
+        if not isinstance(state, dict) or state.get("visual") is not True:
+            return None
+        canvas, viewport = state.get("canvas_rect"), state.get("viewport")
+        if (not isinstance(canvas, list) or len(canvas) != 4 or any(type(value) is not int for value in canvas)
+                or not isinstance(viewport, list) or len(viewport) != 5
+                or any(type(value) is not int for value in viewport[:4])
+                or type(viewport[4]) not in (int, float) or viewport[4] != 1):
+            return None
+        left, top, width, height = canvas
+        x, y, inner_width, inner_height, _ = viewport
+        if (width < 96 or height < 96 or not 0 <= left < left + width <= inner_width
+                or not 0 <= top < top + height <= inner_height
+                or not 0 <= x < x + inner_width <= self.width or not 0 <= y < y + inner_height <= self.height):
+            return None
+        with self._lock:
+            if not self._browser_observer or not self.alive:
+                return None
+            try:
+                geometry = json.loads(self._helper("focused-geometry"))
+            except (DesktopError, ValueError):
+                return None
+            if (not isinstance(geometry, dict) or geometry.get("root") != [self.width, self.height]
+                    or geometry.get("viewport") != viewport[:4]):
+                return None
+        return x + left, y + top, width, height
+
+    def browser_canvas_contains(self, state, points):
+        x, y, *_ = state["viewport"]
+        return self._browser_request("canvas-at", state["revision"], [[px - x, py - y] for px, py in points]) is True
+
+    def _browser_request(self, operation, *args):
+        with self._lock:
+            channel = self._browser_channel
+            if channel is None or not self._browser_observer or not self.alive:
+                return None
+            deadline = time.monotonic() + 0.8
+            self._browser_request_id += 1
+            request_id = self._browser_request_id
+            try:
+                channel.settimeout(0.8)
+                channel.sendall(json.dumps([request_id, operation, deadline - 0.05, *args], ensure_ascii=True).encode() + b"\n")
+                while len(self._browser_pending) < 32 * 1024:
+                    if (end := self._browser_pending.find(b"\n")) >= 0:
+                        response_id, result = json.loads(self._browser_pending[:end])
+                        del self._browser_pending[:end + 1]
+                        if response_id == request_id:
+                            return result
+                        continue
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError()
+                    channel.settimeout(remaining)
+                    block = channel.recv(4096)
+                    if not block:
+                        raise OSError()
+                    self._browser_pending.extend(block)
+                raise ValueError("Oversized private browser response")
+            except TimeoutError:
+                return None
+            except (OSError, ValueError):
+                # Keep the channel open so an unavailable observer leaves the browser running.
+                self._browser_observer = False
+                return None
 
     def png(self):
         return self.png_region(0, 0, self.width, self.height)
@@ -714,6 +810,11 @@ class DesktopSession:
             self._closed = True
             failure = None
             try:
+                if self._browser_channel is not None:
+                    try:
+                        self._browser_channel.close()
+                    except OSError as error:
+                        failure = error
                 try:
                     self._stop_helper()
                 except (OSError, subprocess.TimeoutExpired) as error:
