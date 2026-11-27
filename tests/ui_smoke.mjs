@@ -148,12 +148,27 @@ async function smoke() {
     assert(await evaluate('state.runs[0].jobs[3].depends_on.join(",") === state.runs[0].jobs.slice(0, 2).map(job => job.id).join(",")'));
     assert(await evaluate('state.runs[0].jobs[3].observe_only === true && state.runs[0].jobs[0].observe_only === false'));
     assert(await evaluate('$("grid-viewport").scrollHeight > $("grid-viewport").clientHeight && getComputedStyle($("workers-grid")).gridTemplateColumns.split(" ").length === 2'));
-    await wait('Array.from(document.querySelectorAll(".tile-image")).filter(image => image.complete && image.naturalWidth).length >= 2');
+    try {
+      await wait('Array.from(document.querySelectorAll(".tile-image")).filter(image => image.complete && image.naturalWidth).length >= 2', 12000);
+    } catch (error) {
+      const workers = await evaluate('state.runs[0].jobs.map(({ status, detail }) => ({ status, detail }))');
+      const frameStatuses = cdp.responses.filter(item => item.url.includes("/api/frame/")).map(item => item.status);
+      throw new Error(`Expected two live previews. Workers ${JSON.stringify(workers)}. Frame HTTP statuses ${frameStatuses}.`, { cause: error });
+    }
     const worker = await evaluate('state.runs[0].jobs[0].id');
     assert.equal(readFileSync(join(data, "work", worker, "imports", "brief.txt"), "utf8"), "Synthetic input");
     await capture("live-grid");
     await evaluate('globalThis.smokeTile = document.querySelector(".worker-tile"); smokeTile.querySelector(".tile-open").click();');
     await wait('!$("viewer-takeover").disabled && $("viewer-image").naturalWidth > 0');
+    assert(await evaluate(`(() => {
+      const job = jobs.get(viewerId);
+      job.model_usage = { requests: 2, input_tokens: 42 };
+      renderViewer();
+      const reported = $("viewer-inference").textContent === "2 calls · 42 in (partial)";
+      delete job.model_usage;
+      renderViewer();
+      return reported && $("viewer-inference-wrap").hidden;
+    })()`));
     await evaluate('$("viewer-takeover").click()');
     await wait('$("viewer-owner").textContent === "You" && document.activeElement.id === "viewer-desktop"');
     const points = await evaluate('(() => { const img = $("viewer-image"); const box = img.getBoundingClientRect(); return { center: { x: box.x + box.width / 2, y: box.y + box.height / 2 }, edge: { x: box.x + 2, y: box.y + 2 }, width: img.naturalWidth, height: img.naturalHeight }; })()');

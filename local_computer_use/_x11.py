@@ -1,6 +1,7 @@
 """Private X11 client. Xlib's fatal I/O handler stays outside the broker."""
 
 import ctypes as C
+import hashlib
 import json
 import re
 import struct
@@ -138,34 +139,58 @@ class Connection:
             if contents:
                 self.free(contents)
 
-    def png(self):
-        image = self.image(self.display, self.root, 0, 0, self.width, self.height,
+    def editor_ready(self, foreground):
+        # Nano paints an inverse-video title bar on the first terminal row.
+        # Sample below the borders and beyond the blank xterm's initial cursor.
+        width = self.width - 48
+        image = self.image(self.display, self.root, 24, 10, width, 1, C.c_ulong(-1).value, 2)
+        if not image:
+            raise RuntimeError("Could not observe the private editor")
+        try:
+            info = image.contents
+            check_pixel_format(info)
+            row = C.string_at(info.data, width * 4)
+            color = foreground.to_bytes(3, "little")
+            return any(row[offset:offset + 3] == color for offset in range(0, len(row), 4))
+        finally:
+            self.destroy_image(image)
+
+    def png(self, region=None, previous_digest=None):
+        x, y, width, height = region if region is not None else (0, 0, self.width, self.height)
+        image = self.image(self.display, self.root, x, y, width, height,
                            C.c_ulong(-1).value, 2)
         if not image:
             raise RuntimeError("Could not capture private display")
+        digest = b""
         try:
             info = image.contents
-            if (info.bits_per_pixel, info.byte_order, info.red_mask, info.green_mask,
-                info.blue_mask) != (32, 0, 0xFF0000, 0x00FF00, 0x0000FF):
-                raise RuntimeError("Unsupported Xvfb pixel format")
-            if (info.width, info.height) != (self.width, self.height):
+            check_pixel_format(info)
+            if (info.width, info.height) != (width, height):
                 raise RuntimeError("Unexpected Xvfb frame dimensions")
             stride = info.bytes_per_line
-            if not self.width * 4 <= stride <= self.width * 4 + 4:
+            if not width * 4 <= stride <= width * 4 + 4:
                 raise RuntimeError("Unexpected Xvfb scanline size")
-            pixels = C.string_at(info.data, self.height * stride)
+            size = height * stride
+            if previous_digest is not None:
+                # Hash the borrowed XImage buffer before allocating RGB or PNG data.
+                digest = hashlib.sha256((C.c_ubyte * size).from_address(info.data)).digest()
+                if digest == previous_digest:
+                    return digest
+            pixels = C.string_at(info.data, size)
         finally:
             self.destroy_image(image)
         compressor = zlib.compressobj(1)
-        scanline = bytearray(1 + self.width * 3)
+        scanline = bytearray(1 + width * 3)
         chunks = []
         for offset in range(0, len(pixels), stride):
-            row = pixels[offset:offset + self.width * 4]
-            scanline[1::3], scanline[2::3], scanline[3::3] = row[2::4], row[1::4], row[0::4]
+            end = offset + width * 4
+            scanline[1::3] = pixels[offset + 2:end:4]
+            scanline[2::3] = pixels[offset + 1:end:4]
+            scanline[3::3] = pixels[offset:end:4]
             chunks.append(compressor.compress(scanline))
         chunks.append(compressor.flush())
-        header = struct.pack(">IIBBBBB", self.width, self.height, 8, 2, 0, 0, 0)
-        return (b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", header) +
+        header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+        return (digest + b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", header) +
                 png_chunk(b"IDAT", b"".join(chunks)) + png_chunk(b"IEND", b""))
 
     def key_for(self, name, shifted):
@@ -240,6 +265,12 @@ class Connection:
         self.sync(self.display, 0)
 
 
+def check_pixel_format(info):
+    if (info.bits_per_pixel, info.byte_order, info.red_mask, info.green_mask,
+        info.blue_mask) != (32, 0, 0xFF0000, 0x00FF00, 0x0000FF):
+        raise RuntimeError("Unsupported Xvfb pixel format")
+
+
 def png_chunk(name, content):
     return (struct.pack(">I", len(content)) + name + content +
             struct.pack(">I", zlib.crc32(content, zlib.crc32(name))))
@@ -247,9 +278,13 @@ def png_chunk(name, content):
 
 def dispatch(connection, operation, action=None):
     if operation == "png":
-        return connection.png()
+        return connection.png(action)
+    if operation == "png-changed":
+        return connection.png(previous_digest=bytes.fromhex(action) if action else b"")
     if operation == "observe":
         return json.dumps(connection.observation()).encode("ascii")
+    if operation == "editor-ready":
+        return b"1" if connection.editor_ready(action) else b"0"
     if operation == "catalog-ready":
         return b"1" if connection.catalog_ready() else b"0"
     if operation == "apply":

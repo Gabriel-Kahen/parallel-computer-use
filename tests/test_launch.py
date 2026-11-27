@@ -3,7 +3,11 @@ import contextlib
 import http.client
 import io
 import json
+import os
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from dataclasses import asdict
 from pathlib import Path
@@ -41,6 +45,34 @@ http.server.HTTPServer(("127.0.0.1", int(flag("--port"))), Handler).serve_foreve
 
 
 class LauncherTest(unittest.TestCase):
+    def test_guard_removes_scratch_when_child_ignores_termination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory) / "scratch"
+            scratch.mkdir()
+            marker = scratch / "ready"
+            spawn = Path(__file__).resolve().parents[1] / "local_computer_use" / "_spawn.py"
+            read, write = os.pipe()
+            child = ("import signal,sys,time; from pathlib import Path;"
+                     "signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+                     "Path(sys.argv[1]).touch(); time.sleep(20)")
+            try:
+                process = subprocess.Popen([
+                    sys.executable, str(spawn), "guard", str(read), "-", str(scratch), "-",
+                    sys.executable, "-c", child, str(marker),
+                ], pass_fds=(read,), start_new_session=True)
+            finally:
+                os.close(read)
+            try:
+                deadline = time.monotonic() + 4
+                while not marker.is_file() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(marker.is_file())
+                os.write(write, b"1")
+            finally:
+                os.close(write)
+                process.wait(timeout=5)
+            self.assertFalse(scratch.exists())
+
     def test_managed_process_is_authenticated_private_and_reaped(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

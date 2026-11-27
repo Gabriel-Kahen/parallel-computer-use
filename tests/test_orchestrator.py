@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from local_computer_use.orchestrator import Job, Orchestrator, RequestError, Run, TERMINAL
+from local_computer_use.providers import DecisionUsage
 from local_computer_use.store import Store
 
 
@@ -20,13 +21,20 @@ class FakeDesktop:
         self.closed = False
         self.releases = 0
         self.focus = 27
+        self.crops = []
+        self.captures = 0
 
     def observation(self):
         return {"width": self.width, "height": self.height, "focus": self.focus,
                 "active_window": self.focus}
 
     def png(self):
+        self.captures += 1
         return b"frame:" + str(len(self.actions)).encode()
+
+    def png_region(self, x, y, width, height):
+        self.crops.append((x, y, width, height))
+        return b"crop"
 
     def apply(self, action):
         self.actions.append(action)
@@ -119,6 +127,46 @@ class OrchestratorTest(unittest.TestCase):
         self.assertTrue(all(desktop.closed for desktop in self.desktops))
         self.assertIn("3 of 3", app.runs[run].summary)
 
+    def test_pending_job_captures_after_a_model_slot_is_available(self):
+        provider = GateProvider()
+        app = self.build({"local": provider}, sessions=2, inference=1)
+        run = app.start_run({"prompt": "fixture", "count": 2, "mode": "manual"})
+        self.assertTrue(provider.entered.wait(3))
+        self.wait_for(lambda: len(self.desktops) == 2)
+        self.assertEqual(sum(desktop.captures for desktop in self.desktops), 1)
+        provider.release.set()
+        self.wait_for(lambda: app.runs[run].status == "completed")
+        self.assertEqual([desktop.captures for desktop in self.desktops], [1, 1])
+
+    def test_verification_waits_for_application_to_paint_after_input(self):
+        class PaintProvider(GateProvider):
+            def decide(self, prompt, image, cancel):
+                self.images.append(image)
+                if len(self.images) == 1:
+                    self.entered.set()
+                    self.release.wait(3)
+                    return {"type": "key", "key": "ctrl+s"}
+                return {"type": "done", "result": "Save verified"}
+
+        provider = PaintProvider()
+        app = self.build({"local": provider})
+        run = app.start_run({"prompt": "Save the document"})
+        self.assertTrue(provider.entered.wait(3))
+        desktop = self.desktops[0]
+        apply = desktop.apply
+        paint_at = float("inf")
+
+        def delayed_apply(action):
+            nonlocal paint_at
+            apply(action)
+            paint_at = time.monotonic() + 0.07
+
+        desktop.apply = delayed_apply
+        desktop.png = lambda: b"new" if time.monotonic() >= paint_at else b"frame:0"
+        provider.release.set()
+        self.wait_for(lambda: app.runs[run].status == "completed")
+        self.assertEqual(provider.images, [b"frame:0", b"new"])
+
     def test_manual_handoff_rejects_late_model_and_user_input(self):
         provider = GateProvider()
         app = self.build({"local": provider})
@@ -140,6 +188,22 @@ class OrchestratorTest(unittest.TestCase):
         self.wait_for(lambda: job.status == "completed")
         self.assertEqual(self.desktops[0].actions, [{"type": "key", "key": "Return"}])
         self.assertGreaterEqual(self.desktops[0].releases, 3)
+
+    def test_turn_limit_keeps_a_desktop_during_manual_takeover(self):
+        provider = GateProvider()
+        app = self.build({"local": provider})
+        with patch("local_computer_use.orchestrator.MAX_STEPS", 1):
+            run = app.start_run({"prompt": "fixture"})
+            job = app.runs[run].jobs[0]
+            self.assertTrue(provider.entered.wait(3))
+            claim = app.command(job.id, {"command": "takeover"})
+            self.assertTrue(provider.cancelled.wait(2))
+            app.command(job.id, {"command": "input", "lease": claim["lease"],
+                                 "action": {"type": "key", "key": "Return"}})
+            self.assertFalse(self.desktops[0].closed)
+            app.command(job.id, {"command": "return", "lease": claim["lease"]})
+            self.wait_for(lambda: job.status == "failed")
+            self.assertIn("1-turn budget", job.detail)
 
     def test_stale_user_cleanup_cannot_pause_new_owner(self):
         provider = GateProvider()
@@ -324,6 +388,139 @@ class OrchestratorTest(unittest.TestCase):
         self.assertIn("Input actions are disabled", provider.prompts[0])
         self.assertIn("can only observe", provider.prompts[1])
         self.assertEqual(self.desktops[0].actions, [{"type": "click", "button": 1, "x": 959, "y": 0}])
+
+    def test_crop_is_single_turn_and_clicks_map_to_the_crop(self):
+        class ZoomProvider(GateProvider):
+            def decide_with_usage(self, prompt, screenshot, cancel, *, directives):
+                self.images.append(screenshot)
+                if len(self.images) == 1:
+                    self.directives = directives
+                    return {"type": "zoom", "region": [250, 250, 750, 750]}, DecisionUsage(700, 27, 30)
+                if len(self.images) == 2:
+                    self.cropped_directives = directives
+                    return {"type": "click", "x": 1000, "y": 0, "units": "normalized"}, DecisionUsage(200, 25, 101)
+                return {"type": "done", "result": "Read and verified"}, DecisionUsage(700, 13, 66)
+
+        provider = ZoomProvider()
+        app = self.build({"local": provider})
+        run = app.start_run({"prompt": "Inspect a small detail"})
+        self.wait_for(lambda: app.runs[run].status == "completed")
+        job = app.runs[run].jobs[0]
+        self.assertEqual(self.desktops[0].crops, [(240, 160, 480, 480 - 160)])
+        self.assertEqual(self.desktops[0].actions, [{"type": "click", "x": 719, "y": 160, "button": 1}])
+        self.assertEqual(provider.images, [b"frame:0", b"crop", b"frame:1"])
+        self.assertIn("zoom", provider.directives)
+        self.assertIn("overview", provider.cropped_directives)
+        self.assertNotIn("zoom", provider.cropped_directives)
+        self.assertEqual(job.model_usage["input_tokens"], 1600)
+        self.assertEqual(job.model_usage["output_tokens"], 65)
+        self.assertEqual(job.model_usage["cached_tokens"], 197)
+
+    def test_nested_zoom_is_rejected_and_reobserves_overview(self):
+        class RepeatZoomProvider(GateProvider):
+            def decide(self, prompt, image, cancel):
+                self.images.append(image)
+                if len(self.images) <= 2:
+                    return {"type": "zoom", "region": [250, 250, 750, 750]}
+                self.final_prompt = prompt
+                return {"type": "done", "result": "Read the complete screen"}
+
+        provider = RepeatZoomProvider()
+        app = self.build({"local": provider})
+        run = app.start_run({"prompt": "Compare two visible rows", "observe_only": True})
+        self.wait_for(lambda: app.runs[run].status == "completed")
+        self.assertEqual(provider.images, [b"frame:0", b"crop", b"frame:0"])
+        self.assertIn("Return to the full screen", provider.final_prompt)
+
+    def test_overview_rejects_a_duplicate_crop_on_the_same_frame(self):
+        class RepeatZoomProvider(GateProvider):
+            def decide(self, prompt, image, cancel):
+                self.images.append(image)
+                if len(self.images) in (1, 3):
+                    return {"type": "zoom", "region": [250, 250, 750, 750]}
+                if len(self.images) == 2:
+                    return {"type": "overview"}
+                self.final_prompt = prompt
+                return {"type": "done", "result": "Read the complete screen"}
+
+        provider = RepeatZoomProvider()
+        app = self.build({"local": provider})
+        run = app.start_run({"prompt": "Compare two visible rows", "observe_only": True})
+        self.wait_for(lambda: app.runs[run].status == "completed")
+        self.assertEqual(provider.images, [b"frame:0", b"crop", b"frame:0", b"frame:0"])
+        self.assertIn("This region was already shown", provider.final_prompt)
+
+    def test_zoom_requested_from_a_stale_focus_falls_back_to_the_full_frame(self):
+        class ZoomProvider(GateProvider):
+            def decide(self, prompt, image, cancel):
+                self.images.append(image)
+                if len(self.images) == 1:
+                    self.entered.set()
+                    self.release.wait(3)
+                    return {"type": "zoom", "region": [100, 100, 900, 900]}
+                return {"type": "done", "result": "Fresh view"}
+
+        provider = ZoomProvider()
+        app = self.build({"local": provider})
+        run = app.start_run({"prompt": "Inspect an offline fixture", "observe_only": True})
+        self.assertTrue(provider.entered.wait(3))
+        self.desktops[0].focus += 1
+        provider.release.set()
+        self.wait_for(lambda: app.runs[run].status == "completed")
+        self.assertEqual(provider.images, [b"frame:0", b"frame:0"])
+        self.assertEqual(self.desktops[0].crops, [])
+
+    def test_batch_collapses_two_input_turns_and_keeps_final_observation(self):
+        class BatchProvider(GateProvider):
+            def decide(self, prompt, image, cancel):
+                self.images.append(image)
+                if len(self.images) == 1:
+                    return {"type": "batch", "actions": [
+                        {"type": "type", "text": "fixture"},
+                        {"type": "key", "key": "ctrl+s"},
+                    ]}
+                self.finish_prompt = prompt
+                return {"type": "done", "result": "Saved"}
+
+        provider = BatchProvider()
+        app = self.build({"local": provider})
+        run = app.start_run({"prompt": "Write a fixture note and save it"})
+        self.wait_for(lambda: app.runs[run].status == "completed")
+        job = app.runs[run].jobs[0]
+        self.assertEqual(app.artifact(job.id, "notes.txt"), b"export")
+        self.assertEqual(job.model_usage["requests"], 2)
+        self.assertEqual(provider.images, [b"frame:0", b"frame:2"])
+        self.assertIn("Applied 2 of 2 batch steps", provider.finish_prompt)
+
+    def test_batch_stops_when_typing_changes_focus(self):
+        class BatchProvider(GateProvider):
+            def decide(self, prompt, image, cancel):
+                self.prompts.append(prompt)
+                if len(self.prompts) == 1:
+                    self.entered.set()
+                    self.release.wait(3)
+                    return {"type": "batch", "actions": [
+                        {"type": "type", "text": "protected"},
+                        {"type": "key", "key": "ctrl+s"},
+                    ]}
+                return {"type": "done", "result": "Focus changed"}
+
+        provider = BatchProvider()
+        app = self.build({"local": provider})
+        run = app.start_run({"prompt": "Batch fixture"})
+        self.assertTrue(provider.entered.wait(3))
+        desktop = self.desktops[0]
+        first = desktop.apply
+
+        def change_focus(action):
+            first(action)
+            desktop.focus += 1
+
+        desktop.apply = change_focus
+        provider.release.set()
+        self.wait_for(lambda: app.runs[run].status == "completed")
+        self.assertEqual(desktop.actions, [{"type": "type", "text": "protected"}])
+        self.assertIn("Batch stopped after 1 step(s)", provider.prompts[-1])
 
     def test_handoff_reuses_live_desktop_and_workspace(self):
         class HandoffProvider(GateProvider):

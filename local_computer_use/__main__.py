@@ -115,9 +115,13 @@ def configured_providers(args, managed=None, config=None):
         return {"local": DemoProvider()}
     identifier, url = (managed.alias, managed.base_url) if managed else (args.model, args.llama_url)
     api_key = managed.api_key if managed else os.environ.get("LCU_LLAMA_API_KEY")
-    providers = {"local": LlamaProvider(identifier, url, timeout=args.model_timeout, api_key=api_key)}
+    providers = {"local": LlamaProvider(identifier, url, timeout=args.model_timeout, api_key=api_key,
+                                       max_output_tokens=args.model_max_tokens,
+                                       reasoning_budget=args.model_reasoning_budget)}
     for name, entry in (config or {}).get("local_models", {}).items():
-        provider = LlamaProvider(entry["model"], entry["url"], timeout=args.model_timeout)
+        provider = LlamaProvider(entry["model"], entry["url"], timeout=args.model_timeout,
+                                 max_output_tokens=entry.get("max_output_tokens"),
+                                 reasoning_budget=entry.get("reasoning_budget"))
         provider.label = entry.get("label", name)
         providers["local-" + name] = provider
     if key := os.environ.get("LCU_GEMINI_API_KEY"):
@@ -225,7 +229,8 @@ def read_config(path):
             if not isinstance(label, str) or not 1 <= len(label) <= 60 or not label.isprintable():
                 raise ValueError(f"{group} labels must be 1–60 printable characters.")
             required = {"argv"} if group == "applications" else {"url", "model"}
-            if not required <= set(entry) or set(entry) - (required | {"label"}):
+            optional = {"label"} if group == "applications" else {"label", "max_output_tokens", "reasoning_budget"}
+            if not required <= set(entry) or set(entry) - (required | optional):
                 raise ValueError(f"Incomplete settings for {name} in {group}.")
             if group == "local_models" and not all(isinstance(entry[key], str) for key in required):
                 raise ValueError(f"Local model {name} requires a URL and model identifier.")
@@ -377,6 +382,10 @@ def main(argv=None):
     server.add_argument("--max-workers", type=bounded(1, 100), default=32)
     server.add_argument("--memory-reserve-mib", type=bounded(256, 65536), default=1024)
     server.add_argument("--model-timeout", type=bounded(5, 900), default=90)
+    server.add_argument("--model-max-tokens", type=bounded(32, 32768),
+                        help="Optional total output-token cap per local model turn.")
+    server.add_argument("--model-reasoning-budget", type=bounded(0, 32768),
+                        help="Optional llama-server reasoning budget for the primary local model.")
     server.add_argument("--width", type=bounded(640, 1280), default=960)
     server.add_argument("--height", type=bounded(480, 960), default=640)
     server.add_argument("--llama-url", default=os.environ.get("LCU_LLAMA_URL", "http://127.0.0.1:8080/v1"))

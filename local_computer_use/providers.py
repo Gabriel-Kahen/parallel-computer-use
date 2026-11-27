@@ -12,6 +12,7 @@ import socket
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 from urllib.parse import urlsplit
 
@@ -29,11 +30,17 @@ _PNG = b"\x89PNG\r\n\x1a\n"
 _T = TypeVar("_T")
 _DIRECTIVE_TYPES = (
     "plan", "click", "drag", "move", "scroll", "key", "type",
-    "wait", "message", "handoff", "done", "blocked",
+    "wait", "message", "handoff", "done", "blocked", "batch", "zoom", "overview",
 )
 _DIRECTIVE_SCHEMA = {
     "type": "object",
-    "properties": {"type": {"type": "string", "enum": list(_DIRECTIVE_TYPES)}},
+    "properties": {
+        "type": {"type": "string", "enum": list(_DIRECTIVE_TYPES)},
+        "result": {"type": "string"},
+        "reason": {"type": "string"},
+        "text": {"type": "string"},
+        "target": {"type": "string"},
+    },
     "required": ["type"],
     "additionalProperties": True,
 }
@@ -59,6 +66,8 @@ class ProviderTimeout(ProviderError):
 class ProviderResponseError(ProviderError):
     """The provider returned malformed, truncated, or invalid output."""
 
+    usage = None
+
 
 class ProviderTransportError(ProviderError):
     """The provider connection failed."""
@@ -82,6 +91,43 @@ class Provider(Protocol):
     def decide(
         self, prompt: str, screenshot: bytes | None, cancel: threading.Event,
     ) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class DecisionUsage:
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_tokens: int | None = None
+    prefill_ms: float | None = None
+    decode_ms: float | None = None
+
+    @classmethod
+    def from_llama(cls, response):
+        usage = response.get("usage")
+        timings = response.get("timings")
+        usage = usage if isinstance(usage, dict) else {}
+        timings = timings if isinstance(timings, dict) else {}
+        details = usage.get("prompt_tokens_details")
+        details = details if isinstance(details, dict) else {}
+
+        def tokens(value):
+            return value if type(value) is int and 0 <= value <= 100_000_000 else None
+
+        def millis(value):
+            return value if type(value) in (int, float) and 0 <= value <= 3_600_000 else None
+
+        cached = tokens(timings.get("cache_n"))
+        if cached is None:
+            cached = tokens(details.get("cached_tokens"))
+        actual_prefill = tokens(timings.get("prompt_n"))
+        total = tokens(usage.get("prompt_tokens"))
+        if actual_prefill is not None and cached is not None:
+            # Some server versions put only uncached tokens in the usage field.
+            total = max(total or 0, actual_prefill + cached)
+        output = tokens(usage.get("completion_tokens"))
+        if output is None:
+            output = tokens(timings.get("predicted_n"))
+        return cls(total, output, cached, millis(timings.get("prompt_ms")), millis(timings.get("predicted_ms")))
 
 
 def _check_cancel(cancel: threading.Event) -> None:
@@ -306,16 +352,27 @@ class LlamaProvider:
         *,
         timeout: float = 90,
         api_key: str | None = None,
+        max_output_tokens: int | None = None,
+        reasoning_budget: int | None = None,
     ):
         self.model = _model_id(model)
         self.timeout = _timeout(timeout)
         self._url = _llama_endpoint(base_url)
         self._headers = ({"Authorization": f"Bearer {_credential(api_key, 'Invalid local model key')}"}
                          if api_key is not None else None)
+        for value, minimum, label in ((max_output_tokens, 32, "Output token limit"),
+                                       (reasoning_budget, 0, "Reasoning token budget")):
+            if value is not None and (type(value) is not int or not minimum <= value <= 32768):
+                raise ValueError(f"{label} must be an integer between {minimum} and 32768")
+        self._max_output_tokens = max_output_tokens
+        self._reasoning_budget = reasoning_budget
 
     def decide(
         self, prompt: str, screenshot: bytes | None, cancel: threading.Event,
     ) -> dict[str, Any]:
+        return self.decide_with_usage(prompt, screenshot, cancel)[0]
+
+    def decide_with_usage(self, prompt, screenshot, cancel, *, directives=None):
         _validate_prompt(prompt, cancel)
         image = _image_parts(screenshot)
         content = [{"type": "text", "text": prompt}]
@@ -325,6 +382,13 @@ class LlamaProvider:
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
             })
+        schema = _DIRECTIVE_SCHEMA
+        if directives:
+            schema = {**schema, "properties": {
+                **schema["properties"], "type": {"type": "string", "enum": list(directives)},
+            }}
+            if directives == ("done",):
+                schema["required"] = ["type", "result"]
         request = {
             "model": self.model,
             "messages": [
@@ -333,18 +397,31 @@ class LlamaProvider:
             ],
             "stream": False,
             "temperature": 0,
-            "max_tokens": MAX_OUTPUT_TOKENS,
-            "response_format": {"type": "json_object", "schema": _DIRECTIVE_SCHEMA},
+            "max_tokens": self._max_output_tokens or MAX_OUTPUT_TOKENS,
+            "response_format": {"type": "json_object", "schema": schema},
         }
+        if self._reasoning_budget is not None:
+            request["reasoning_budget_tokens"] = self._reasoning_budget
         response = _post(self._url, request, cancel, self.timeout, _read_json, self._headers)
+        usage = DecisionUsage.from_llama(response)
         try:
             choice, = response["choices"]
             message = choice["message"]
+            if choice["finish_reason"] == "length":
+                raise ProviderResponseError("The local model reached its output-token limit before producing a directive")
             if choice["finish_reason"] != "stop" or message.get("tool_calls") or message.get("refusal"):
                 raise ProviderResponseError("Local model did not finish a text directive")
-            return _directive(message["content"], cancel)
+            directive = _directive(message["content"], cancel)
+            if directives and directive["type"] not in directives:
+                raise ProviderResponseError("The local model chose a directive unavailable for this job")
+            return directive, usage
+        except ProviderResponseError as error:
+            error.usage = usage
+            raise
         except (KeyError, TypeError, ValueError, AttributeError):
-            raise ProviderResponseError("Local model response has no completed directive") from None
+            error = ProviderResponseError("Local model response has no completed directive")
+            error.usage = usage
+            raise error from None
 
 
 class GeminiProvider:

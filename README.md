@@ -69,6 +69,7 @@ For Gemini, set `LCU_GEMINI_MODEL` and provide `LCU_GEMINI_API_KEY` in the servi
 - [What the app should do](#what-the-app-should-do)
 - [Architecture and dependencies](#architecture-and-dependencies)
 - [Desktop sessions and input ownership](#desktop-sessions-and-input-ownership)
+- [Computer-use efficiency](#computer-use-efficiency)
 - [Agent coordination and recovery](#agent-coordination-and-recovery)
 - [Model serving and scheduling](#model-serving-and-scheduling)
 - [Optional Codex and Gemini providers](#optional-codex-and-gemini-providers)
@@ -133,7 +134,7 @@ The pilot tests qualify separate authenticated displays, independent app input a
 
 ### Observation and action
 
-- Give the model a bounded screenshot, the image dimensions, the focused window, and a compact history of recent actions. Add semantic UI observations through the guest's AT-SPI bus only when testing shows an improvement. A browser-specific adapter is optional and must operate on the same session and respect the same policy. [Ubuntu accessibility stack](https://ubuntu.com/desktop/docs/en/latest/explanation/accessibility-stack/)
+- Give the model a bounded screenshot, its coordinate space, and a compact history of recent actions. The broker tracks the focused X11 window. Any future semantic UI observer must operate within the same guest and preserve the same input policy. [Ubuntu accessibility stack](https://ubuntu.com/desktop/docs/en/latest/explanation/accessibility-stack/)
 - Start with a typed set of actions for pointer movement and clicks, scrolling, key combinations, text entry, switching or launching permitted apps, waiting, and reporting a result or blocker. Validate model output and targets before dispatch. Keep raw shell commands outside the model's action interface.
 - Bind each action to a session, ownership generation, and observation. Map normalized or image-relative coordinates through the exact source frame and reject invalid or stale targets after resize, focus changes, or handoff. Use focused-window identity when available. Capture a fresh frame after actions that change the screen. Bound steps, retries, and time spent waiting.
 - Detect stalled loops using repeated actions and unchanged observations. Expose the current blocker, offer manual intervention, and collect a partial result when possible. Handle keyboard layout, scaling, focus changes, modal dialogs, Unicode text entry, and clipboard paste as separate verification cases.
@@ -143,6 +144,55 @@ The pilot tests qualify separate authenticated displays, independent app input a
 Each desktop has a single input owner at any instant. Observers can all look at the same session. The broker alone transfers write ownership between an agent, the user, or a second agent. On pause, takeover, ownership loss, or cancellation, it revokes the previous lease, invalidates queued actions, settles any action already dispatched, and releases held keys and buttons. The new owner gets a fresh observation and a new lease. Returning control to the model follows the same rule.
 
 Agent-to-agent handoff transfers a session handle and a short note through the orchestrator. It leaves the app open and preserves its state. Sharing findings uses messages or copies of artifacts. Shared writable project folders can be evaluated later for apps that support concurrency.
+
+## Computer-use efficiency
+
+Each GUI job opens an app in its own Bubblewrap sandbox and authenticated Xvfb display. The dashboard reads full previews from the service. For inference, a worker takes a model slot, captures the current private desktop, and sends the image with the assignment, recent actions, and relevant messages and results. The model returns one JSON directive. The broker checks the worker's input lease, bounds, and focused X11 window before applying input through XTEST. Each normal decision sees the current image and a short text history. Older screenshots are absent from the prompt.
+
+The built-in Nano worker can type and save the current file in one decision. The broker rechecks focus and ownership between those steps and reports a partial batch if either changes. A fresh image verifies the result. After input, the worker polls for a repaint for up to 120 ms before queueing its next inference. The editor confirms that Nano has painted before handing its first frame to the agent.
+
+The model can request a native-resolution crop for small text or controls. That crop replaces the following model image, with coordinates interpreted relative to what the model sees. The dashboard stays at full view. If a required detail is outside the crop, the model can request the full screen again. A crop can save visual tokens when the projector preserves the smaller dimensions. It also costs an extra observation turn when requested from a full view, so compare whole-task cost and success. Some projector settings, including a configured minimum image-token budget, can erase the token savings. Reducing PNG bytes affects capture and transport at the same dimensions. [Anthropic computer-use image handling](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool) · [llama.cpp projector](https://github.com/ggml-org/llama.cpp/blob/master/tools/mtmd/mtmd-model.cpp)
+
+Local worker state records model requests, screenshot bytes, queue and inference time, and tokens and cache reuse when the backend reports them. The viewer shows calls and token usage. Set the primary local model's optional output cap with `--model-max-tokens` and the llama-server thinking limit with `--model-reasoning-budget`. Extra local providers in the JSON config accept `max_output_tokens` and `reasoning_budget`. The default respects the local model server's reasoning configuration. [llama.cpp timings and context usage](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md#timings-and-context-usage)
+
+In 60 paired measurements on a static 1024 × 768 Nano desktop, median full PNG capture took 5.03 ms, an unchanged-frame check took 3.14 ms, and a quarter-area crop took 1.60 ms. The changed-frame path took 6.83 ms because it checks for change and then encodes the image. The unchanged path omits RGB conversion, PNG encoding, and image transfer.
+
+### Where structured observations help
+
+1. **Use a permitted site API for structured searches.** An eBay listing search can send filters and return item fields directly, leaving the model to compare the results. [eBay Browse API](https://developer.ebay.com/develop/api/buy/browse_api/item/search)
+2. **Read the relevant browser elements or native controls.** A guest-local observer can return a bounded list of visible labels, roles, values, and action IDs from the focused page or window. The broker can revalidate IDs before acting. BrowserGym combines element IDs, visibility and layout with screenshots. An OSWorld-Human study found full accessibility trees could add significant observation time and prompt tokens, so cap work by window, node count, text size, and time. [BrowserGym observations](https://arxiv.org/html/2412.05467v1#S3.SS1) · [OSWorld-Human observation study](https://arxiv.org/html/2506.16042v1#S3.SS3) · [Chrome accessibility protocol](https://chromedevtools.github.io/devtools-protocol/tot/Accessibility/) · [Linux AT-SPI](https://gnome.pages.gitlab.gnome.org/at-spi2-core/libatspi/)
+3. **Use pixels when layout and appearance matter.** Keep a full screenshot for unfamiliar screens, canvas, visual comparisons, and apps with sparse accessibility data. Use a crop when a detail is too small. Evaluate all routes on verified results, including failed attempts, and compare fresh and cached tokens, inference rounds, and completion time. [OSWorld benchmark](https://arxiv.org/abs/2404.07972) · [OSWorld-G grounding benchmark](https://osworld-grounding.github.io/)
+
+### Inkling 2 Mini on the V100
+
+An isolated CUDA test used Inkling 2 Mini IQ4_NL, its Q8_0 vision projector, and llama.cpp b12600 at 29b52d398. The server had two 6,144-token slots and occupied about 19 GiB of device memory shortly after startup, including the card's 623 MiB starting usage. A fresh server took about 32 s to become ready. [Inkling model card](https://huggingface.co/thinkingmachines/Inkling-2-Mini) · [GGUF and vision projector](https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF)
+
+These warm, cache-disabled price-reading requests all returned the same correct price. The text row uses fixture text supplied directly to the model. It estimates what a compact semantic observer could save at inference time.
+
+| Observation | Reasoning budget | Input tokens | Output tokens | Wall time |
+| --- | ---: | ---: | ---: | ---: |
+| 800 × 600 full frame | Default | 421 | 293 | 9.76 s |
+| 800 × 600 full frame | 32 | 421 | 98 | 3.97 s |
+| 800 × 600 full frame | 96 | 421 | 127 | 4.66 s |
+| 560 × 290 crop | 96 | 233 | 127 | 4.45 s |
+| Catalog rows as text | 96 | 152 | 127 | 4.23 s |
+
+The crop used 45% fewer input tokens and reduced prompt evaluation from 889 ms to 655 ms for the matching 96-budget prompt. These are individual requests. End-to-end results depend on whether prompts, crops, and batch actions actually help the worker finish correctly. A zero reasoning budget on the installed build looped through role markers and consumed the output cap. Positive budgets worked for this price read. Later upstream code added handling for the template's no-reasoning effort. [llama.cpp Inkling template change](https://github.com/ggml-org/llama.cpp/pull/32763)
+
+In an app run with two independent Chromium sessions, using a reasoning budget of 96 and a 384-token output cap, Inkling completed both catalog jobs in 10.08 s with two screenshots and 1,325 reported tokens. It returned the expected $27 combined price and $16 difference. The earlier broker and default reasoning configuration made six image requests and used 4,120 reported tokens before rejecting both results because they were JSON objects where the app expected strings. The comparison includes both the stricter response schema and the tighter reasoning configuration.
+
+In an early trial, a second zoom hid a required catalog row and the model miscalculated the price difference. The broker now accepts crops only from the full viewport and rejects immediate repeats of the same region on an unchanged overview. With the app's crop path fed a fixed region containing both rows, Inkling returned the correct $16 difference. On a separate run where the model selected its action, it answered correctly from the full frame in one request.
+
+For the validated short catalog workers, the managed-server flags were
+
+```sh
+python3 -m local_computer_use serve \
+  --llama-server /path/to/llama-server --model-file /path/to/Inkling-2-Mini-IQ4_NL.gguf \
+  --mmproj /path/to/mmproj-Inkling-2-Mini-Q8_0.gguf --gpu-device 0 \
+  --context-per-slot 6144 --inference-slots 2 --model-reasoning-budget 96 --model-max-tokens 384
+```
+
+The reasoning setting influences the thinking block. The output cap limits the whole reply. Use a larger cap if a planning turn needs to describe many workers. The Nano edit required a reasoning budget of 192 in this test. With the 384-token output cap it typed and saved the exact text, then verified the save visually in 19.40 s across two requests. It used 1,855 input tokens, including 932 cached, and 518 output tokens. Budgets of 32 and 96 saved the correct file but repeated the save or failed to finish reporting it. An earlier open-budget guided edit completed in 92.26 s and included a truncated verification turn on a stale frame. These runs compare the full app configurations, including prompt and repaint changes.
 
 ## Agent coordination and recovery
 

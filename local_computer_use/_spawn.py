@@ -36,10 +36,11 @@ def guarded(lifeline, inherited, cleanup, custody, command):
     try:
         return child.wait(timeout=1)
     except subprocess.TimeoutExpired:
-        os.killpg(os.getpgrp(), signal.SIGKILL)
+        pass
     finally:
         if broker_closed and armed_cleanup and cleanup != "-":
             shutil.rmtree(cleanup, ignore_errors=True)
+    os.killpg(os.getpgrp(), signal.SIGKILL)
 
 
 def wait_for_manager(manager):

@@ -934,6 +934,16 @@ function renderViewer() {
   $("viewer-profile-wrap").hidden = !job.browser_profile;
   setText($("viewer-owner"), somebodyElse ? "Another viewer" : desktopOwner(job));
   setText($("viewer-action"), job.detail || "No actions yet");
+  const usage = job.model_usage || {};
+  $("viewer-inference-wrap").hidden = !usage.requests;
+  if (usage.requests) {
+    const calls = usage.requests + (usage.requests === 1 ? " call" : " calls");
+    const tokens = [["input_tokens", "in"], ["output_tokens", "out"]]
+      .filter(([field]) => Number.isFinite(usage[field]))
+      .map(([field, label]) => usage[field].toLocaleString() + " " + label).join(" / ");
+    const partial = (usage.token_reports || 0) < usage.requests ? " (partial)" : "";
+    setText($("viewer-inference"), calls + (tokens ? " · " + tokens + partial : ""));
+  }
   setText($("viewer-task"), job.prompt);
   setText($("viewer-takeover"), controlling ? "Return control" : "Take control");
   setText($("viewer-pause"), controlling ? "Pause worker" : pauseCommand(job) === "resume" ? "Resume" : "Pause");

@@ -4,11 +4,13 @@ import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -31,6 +33,17 @@ class NativeTemplatePolicyTest(unittest.TestCase):
             DesktopSession("native", mode="host-private", native_argv=("/usr/bin/true",))
         with self.assertRaises(ValueError):
             DesktopSession("editor", native_argv=("/usr/bin/true",))
+
+
+class CaptureRegionTest(unittest.TestCase):
+    def test_invalid_regions_are_rejected_before_capture(self):
+        desk = DesktopSession.__new__(DesktopSession)
+        desk.width, desk.height = 640, 480
+        for region in ((-1, 0, 1, 1), (0, -1, 1, 1), (640, 0, 1, 1), (639, 479, 2, 1),
+                       (639, 479, 1, 2), (0, 0, 0, 1), (0, 0, 1, -1), (False, 0, 1, 1),
+                       (0, 0, 1.0, 1)):
+            with self.subTest(region=region), self.assertRaises(ValueError):
+                desk.png_region(*region)
 
 
 class BrowserProfilePolicyTest(unittest.TestCase):
@@ -67,6 +80,59 @@ class DesktopBoundaryTest(unittest.TestCase):
                 return
             time.sleep(0.05)
         self.fail("Private desktop did not reach the expected state")
+
+    def png_rows(self, png, width, height):
+        self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(struct.unpack_from(">II", png, 16), (width, height))
+        self.assertEqual(png[37:41], b"IDAT")
+        size, = struct.unpack_from(">I", png, 33)
+        pixels = zlib.decompress(png[41:41 + size])
+        stride = 1 + width * 3
+        self.assertEqual(pixels[::stride], bytes(height))
+        return [pixels[row + 1:row + stride] for row in range(0, len(pixels), stride)]
+
+    def test_png_region_preserves_viewport_pixels_and_edge_coordinates(self):
+        with DesktopSession(width=640, height=480) as desk:
+            full = self.png_rows(desk.png(), 640, 480)
+            x, y, width, height = 7, 17, 313, 177
+            cropped = self.png_rows(desk.png_region(x, y, width, height), width, height)
+            self.assertEqual(cropped, [row[x * 3:(x + width) * 3] for row in full[y:y + height]])
+            self.assertEqual(self.png_rows(desk.png_region(639, 479, 1, 1), 1, 1), [full[-1][-3:]])
+
+    def test_editor_waits_for_nano_to_render_in_focused_xterm(self):
+        class DelayedEditor(DesktopSession):
+            def _app_command(self, home, workspace):
+                command, browser_files = super()._app_command(home, workspace)
+                start = command.index("-e") + 1
+                command[start:start] = ["/usr/bin/sh", "-c",
+                                        'sleep .5; exec "$@"', "sh"]
+                return command, browser_files
+
+        with DelayedEditor(width=320, height=240) as desk:
+            frame = self.png_rows(desk.png(), 320, 240)
+            self.assertGreater(frame[16][32 * 3:48 * 3].count(b"\x17\x17\x17"), 8)
+
+    def test_conditional_capture_uses_the_supplied_digest_and_refreshes_on_change(self):
+        with DesktopSession(width=640, height=480) as desk:
+            old_image, old_digest = desk.png_if_changed()
+            self.assertEqual(len(old_digest), 32)
+            self.assertEqual(desk.png_if_changed(old_digest), (None, old_digest))
+            self.assertEqual(desk.png_if_changed(), (old_image, old_digest))
+            desk.apply({"type": "type", "text": "Capture fixture"})
+            changed = None
+
+            def changed_pixels():
+                nonlocal changed
+                changed = desk.png_if_changed(old_digest)
+                return changed[0] is not None
+
+            self.wait_until(changed_pixels)
+            new_image, new_digest = changed
+            self.assertNotEqual(new_image, old_image)
+            self.assertNotEqual(new_digest, old_digest)
+            self.assertEqual(desk.png_if_changed(new_digest), (None, new_digest))
+            self.assertEqual(desk.png_if_changed(old_digest), (new_image, new_digest))
+            self.assertEqual(desk.png(), new_image)
 
     def test_parallel_credentials_pointer_and_unicode(self):
         with ThreadPoolExecutor(max_workers=4) as pool:

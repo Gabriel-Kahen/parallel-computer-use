@@ -13,6 +13,7 @@ from local_computer_use.providers import (
     MAX_PROMPT_BYTES,
     MAX_RESPONSE_BYTES,
     CodexProvider,
+    DecisionUsage,
     GeminiProvider,
     LlamaProvider,
     ProviderCancelled,
@@ -131,6 +132,30 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(base64.b64decode(encoded), PNG)
         self.assertIn("done", body["response_format"]["schema"]["properties"]["type"]["enum"])
         self.assertNotIn("tools", body)
+
+    def test_llama_reports_usage_and_sets_optional_turn_limits(self):
+        response = json.loads(llama_reply(json.dumps(DONE)))
+        response["usage"] = {"prompt_tokens": 65, "completion_tokens": 12}
+        response["timings"] = {"prompt_n": 65, "cache_n": 220, "prompt_ms": 7.5,
+                               "predicted_ms": 29.5}
+        self.server.reply = json.dumps(response).encode()
+        provider = LlamaProvider("fixture", self.local_url, max_output_tokens=400, reasoning_budget=0)
+        action, usage = provider.decide_with_usage("Read", PNG, self.cancel, directives=("done",))
+        self.assertEqual(action, DONE)
+        self.assertEqual(usage, DecisionUsage(285, 12, 220, 7.5, 29.5))
+        request = self.server.requests[0][2]
+        self.assertEqual(request["max_tokens"], 400)
+        self.assertEqual(request["reasoning_budget_tokens"], 0)
+        self.assertEqual(request["response_format"]["schema"]["properties"]["type"]["enum"], ["done"])
+        with self.assertRaises(ProviderResponseError) as error:
+            provider.decide_with_usage("Plan", None, self.cancel, directives=("plan",))
+        self.assertEqual(error.exception.usage, usage)
+
+    def test_llama_standard_usage_without_timings(self):
+        usage = DecisionUsage.from_llama({"usage": {"prompt_tokens": 77, "completion_tokens": 9,
+                                                     "prompt_tokens_details": {"cached_tokens": 19}}})
+        self.assertEqual(usage, DecisionUsage(77, 9, 19))
+        self.assertEqual(DecisionUsage.from_llama({"usage": [], "timings": {"prompt_ms": True}}), DecisionUsage())
 
     def test_local_endpoint_only_accepts_loopback(self):
         for endpoint in (

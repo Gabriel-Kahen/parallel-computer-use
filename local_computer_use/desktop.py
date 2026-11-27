@@ -30,6 +30,7 @@ _SPAWN = Path(__file__).with_name("_spawn.py").resolve()
 _X11 = Path(__file__).with_name("_x11.py").resolve()
 _NETWORK = Path(__file__).with_name("_network.py").resolve()
 _CHROME = Path("/opt/google/chrome/chrome")
+_EDITOR_FOREGROUND = "#171717"
 _I3_CONFIG = """font pango:monospace 9
 focus_follows_mouse no
 default_border pixel 2
@@ -307,7 +308,8 @@ class DesktopSession:
                     raise DesktopError("Editor input must be a regular, unlinked workspace file")
             return [
                 _binary("xterm"), "-class", "LCUEditor", "-title", "Session editor",
-                "-fa", "Monospace", "-fs", "13", "-bg", "#f8f8f8", "-fg", "#171717",
+                "-fa", "Monospace", "-fs", "13", "-b", "2",
+                "-bg", "#f8f8f8", "-fg", _EDITOR_FOREGROUND,
                 "-xrm", "LCUEditor*selectToClipboard: true",
                 "-xrm", "LCUEditor*VT100.translations: #override\nShift <Key>Insert: insert-selection(CLIPBOARD)",
                 "-e", _binary("nano"), "-I", "-R", workspace / filename,
@@ -414,11 +416,14 @@ class DesktopSession:
         while time.monotonic() < deadline and self.alive:
             observation = self._observe()
             if observation["active_window"] and observation["focus"] not in (0, 1, observation["root"]):
-                if (self.template != "browser" or self.start_url is not None or
-                        self._helper("catalog-ready") == b"1"):
+                if self.template == "editor":
+                    if self._helper("editor-ready", int(_EDITOR_FOREGROUND[1:], 16)) == b"1":
+                        return
+                elif (self.template != "browser" or self.start_url is not None or
+                      self._helper("catalog-ready") == b"1"):
                     return
             time.sleep(0.04)
-        raise DesktopError(f"{self.template} did not open a focused window in {self.mode} mode")
+        raise DesktopError(f"{self.template} did not become ready in {self.mode} mode")
 
     def _sandbox(self, browser_files):
         command = [
@@ -561,11 +566,35 @@ class DesktopSession:
             return self._observe()
 
     def png(self):
+        return self.png_region(0, 0, self.width, self.height)
+
+    def png_region(self, x, y, width, height):
+        """Capture a viewport region at native resolution, as an RGB PNG."""
+        if (any(type(value) is not int for value in (x, y, width, height)) or
+                not (0 <= x < x + width <= self.width and 0 <= y < y + height <= self.height)):
+            raise ValueError("Capture region is outside the private viewport")
         with self._lock:
-            image = self._helper("png")
-            if len(image) < 24 or struct.unpack_from(">II", image, 16) != (self.width, self.height):
-                raise DesktopError("Private display viewport changed")
+            image = self._helper("png", [x, y, width, height])
+            self._check_png(image, width, height)
             return image
+
+    def png_if_changed(self, previous_digest=None):
+        """Capture the full viewport, omitting PNG bytes if the pixels match the digest."""
+        if previous_digest is not None and (
+                not isinstance(previous_digest, bytes) or len(previous_digest) != 32):
+            raise ValueError("Expected a 32-byte capture digest")
+        with self._lock:
+            data = self._helper("png-changed", previous_digest.hex() if previous_digest else None)
+            digest, image = data[:32], data[32:]
+            if not image and digest == previous_digest:
+                return None, digest
+            self._check_png(image, self.width, self.height)
+            return image, digest
+
+    @staticmethod
+    def _check_png(image, width, height):
+        if len(image) < 24 or struct.unpack_from(">II", image, 16) != (width, height):
+            raise DesktopError("Private display returned an unexpected capture size")
 
     def _point(self, action, x="x", y="y"):
         px, py = action.get(x), action.get(y)
