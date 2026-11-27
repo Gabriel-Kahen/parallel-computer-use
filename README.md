@@ -264,13 +264,13 @@ The `NuCl34R/linux-computer-use` workstation at `26f5059` passed its 13 live GUI
 
 ### Observer experiments in the worker app
 
-`serve --observation-mode` selects `pixels`, `ocr`, `semantic`, `hybrid`, or `targeted`. The semantic driver uses a guest-owned Chromium DevTools pipe and sends bounded visible text and references through the worker's private control channel. It supports the bundled offline catalog in an ephemeral Chromium profile. References are tied to the observed document generation and target identity, and the broker checks desktop ownership, focus and current target actionability at dispatch. OCR is optional and uses one Tesseract thread for local read-only work. The dashboard displays the private X11 desktop in every mode.
+`serve --observation-mode` selects `pixels`, `ocr`, `semantic`, `hybrid`, or `targeted`. The semantic driver uses a guest-owned Chromium DevTools pipe and sends bounded visible text and references through the worker's private control channel. It supports the offline catalog and allowlisted HTTPS pages in ephemeral Chromium workers. References are tied to the observed document generation and target identity, and the broker checks desktop ownership, focus and current target actionability at dispatch. OCR is optional and uses one Tesseract thread for local read-only work. The dashboard displays the private X11 desktop in every mode.
 
 Semantic mode can ask for pixels if its observation is incomplete. Hybrid mode proactively includes a screenshot for a visible canvas or large SVG. A changed semantic status after input routes the next turn through verification, with an explicit `continue` response for further work. This lets a canvas action use pixels and its text confirmation use a text-only turn. The `--model-pointer-units` setting fixes the visual coordinate contract for the local model.
 
 Targeted mode adds an automatic crop for one prominent visible canvas. Chromium and the focused X11 window must agree on origin, scale and viewport geometry. Before applying crop-relative input, the broker rechecks the mapping and the cropped pixels. A changed region, detected occlusion, multiple prominent canvases, or uncertain geometry falls back to the full screen. The native 690 × 230 crop matched the corresponding full-frame pixels exactly and reduced the fixture PNG from 30,593 to 11,663 bytes.
 
-The guest checks a shared request deadline before starting a click. If Chromium accepts input and acknowledgment stalls, the outcome is uncertain. The worker takes a fresh observation and gates further input behind verification. An action acknowledgment covers dispatch, and a fixture receipt tests its effect. The semantic-input RPC briefly holds the broker's ownership lock, with a bounded deadline. This experiment uses the exact offline document and a single foreground page.
+The guest checks a shared request deadline before starting a click. If Chromium accepts input and acknowledgment stalls, the outcome is uncertain. The worker takes a fresh observation and gates further input behind verification. An action acknowledgment covers dispatch, and a fixture receipt tests its effect. The semantic-input RPC briefly holds the broker's ownership lock, with a bounded deadline. The observer scopes offline sessions to the catalog and online sessions to the start URL's exact hostname and the foreground document.
 
 The benchmark runs through normal worker scheduling in real Bubblewrap, Xvfb, Chromium or Nano. Browser action fixtures emit one synthetic receipt per input and ask the model to report visible confirmation. Editor fixtures check the returned code and the preserved file bytes. Screenshots in the results count images delivered to the model. Desktop previews and repaint checks can capture separate images.
 
@@ -299,6 +299,32 @@ python -m scripts.compare_worker_observers --mode pixels ocr --task editor_read 
   --server /path/to/llama-server --gguf /path/to/model.gguf --projector /path/to/mmproj.gguf
 python -m scripts.compare_worker_observers --mode hybrid targeted --task canvas --seeds 1 2 \
   --timeout 32 --turn-limit 6 --no-cache --pointer-units pixels \
+  --server /path/to/llama-server --gguf /path/to/model.gguf --projector /path/to/mmproj.gguf
+```
+
+### Live targeted browser qualification
+
+Use **Run settings → Worker assignments** to set a different browser start URL for each worker. Blank entries inherit the shared start URL. For local targeted mode, start the service with `--observation-mode targeted --allow-domain docs.python.org`. The Chromium observer uses a disposable profile and offers `click_link` to match an exact visible HTTPS link on the starting hostname. Element references cover links with query strings or fragments, which the observer omits from link paths. The proxy enforces its configured HTTPS hostname allowlist. After a link click, the worker inspects the browser before sending more input. A canvas crop cannot carry pointer input over to a different document. Pixels remain available when structured evidence or verified crop geometry is unavailable.
+
+The live run used the actual Python 3.14 search page and its JavaScript search results. Three private Chromium workers looked up `argparse`, `pathlib`, and `dataclasses`. Using one Inkling 2 Mini server with three 6,144-token slots on the V100, they returned all three exact chapter titles and URLs in 13.61 s. The model received three requests, 2,239 input tokens, 438 output tokens and zero images. All three model requests overlapped for about 10.05 s. Peak GPU usage was 19,943 MiB, and cold server startup took 29.12 s outside the measured worker run. The scorer checked the browser's rendered results as well as the model reply. A separate run through the normal dashboard service API repeated the three exact answers in 12.92 s with three simultaneous inference requests. [Python search](https://docs.python.org/3.14/search.html) · [Published crawl rules](https://docs.python.org/robots.txt)
+
+The first screenshot comparison captured a loading view even when the DOM had received results. Live Chromium startup now waits for page paint when semantic readiness is available. A screenshot worker that reports a blocker can also retry once if its live desktop has visibly changed. For the matched title-only rerun, both modes used the same viewport, three slots and a rendered-results readiness check. Only the targeted model received page text. The wall times include worker startup and verification.
+
+| Route | Exact chapter titles | Wall time | Model requests | Input tokens | Model images |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Targeted | 3/3 | 12.22 s | 3 | 2,622 | 0 |
+| Screenshots | 2/3 | 30.40 s | 5 | 5,056 | 5 |
+
+The screenshot worker returned `argparse` by itself on the remaining search. For a title-only run, add `--answer-title` to the command below. Use `--mode pixels --answer-title` for the screenshot comparison.
+
+For navigation, opaque element references produced two exact answers in three-worker runs at both 384 and 640 output tokens. A trial that reused the reference action with an HTTPS URL also stalled because Inkling kept returning element IDs. The dedicated `click_link` action gave three exact title-and-URL answers in 23.66 s, with two model requests per worker, 5,542 total input tokens and zero images. The scorer verified one acknowledged click and the correct visible chapter heading on the destination page for every worker. The normal dashboard service, with the full set of worker actions available, returned all three exact answers in 51.41 s. Use `--follow --click-link` to reproduce the benchmark's URL-based method, or `--follow` for the element-reference comparison.
+
+Targeted mode also captured the live canvas in MDN's pointer-lock demo. The app matched a 642 × 361 canvas to the private X11 screen and verified red and black pixels against the demo's source. Inkling correctly reported a red ball on a black background in both modes. Targeted used one 6,961-byte crop, 483 input tokens, and 6.04 s. Screenshots used two full frames, 1,202 input tokens, and 19.04 s. This is one live visual fixture per mode. [MDN demo](https://mdn.github.io/dom-examples/pointer-lock/) · [Canvas source](https://github.com/mdn/dom-examples/blob/main/pointer-lock/app.js)
+
+eBay's User Agreement requires prior express permission for automated access, and its published crawl rules disallow keyword search pages. The qualification used Python documentation. Authorized eBay listing search is available through its OAuth-based Browse API for approved production applications. [eBay User Agreement](https://www.ebay.com/help/policies/member-behavior-policies/user-agreement?id=4259) · [eBay crawl rules](https://www.ebay.com/robots.txt) · [Browse API](https://developer.ebay.com/develop/api/buy/browse_api/item/search) · [Production access](https://developer.ebay.com/api-docs/buy/static/buy-requirements.html)
+
+```sh
+python -m scripts.bench_live_search --no-cache \
   --server /path/to/llama-server --gguf /path/to/model.gguf --projector /path/to/mmproj.gguf
 ```
 

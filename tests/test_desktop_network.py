@@ -138,6 +138,15 @@ class TLSFixture:
                             b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n"
                             b"\r\nfixture catalog"
                         )
+                elif head.startswith(b"GET /live"):
+                    if head.startswith((b"GET /live/next?", b"GET /live/plain ")):
+                        body = b"<main><h1>Reference chapter</h1><p>Chapter reached.</p></main>"
+                    else:
+                        body = (b'<main><h1>Search results</h1><a href="/live/next?lab=token#here">Reference chapter</a> '
+                                b'<a href="/live/plain">Plain chapter</a> '
+                                b'<a href="https://assets.example/other">Other origin</a></main>')
+                    tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n"
+                                + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
         except OSError:
             pass
 
@@ -202,6 +211,47 @@ class TLSProxyTest(unittest.TestCase):
                     self.assertEqual({call.args[0] for call in resolve.call_args_list}, {"catalog.example"})
             finally:
                 fixture.close()
+
+    @unittest.skipUnless(os.environ.get("PCU_TEST_DESKTOP") == "1", "opt in with PCU_TEST_DESKTOP=1")
+    def test_live_browser_observes_and_navigates_only_its_initial_origin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = TLSFixture(Path(directory))
+            self.addCleanup(fixture.close)
+            pin = fixture.spki_pin()
+
+            class ChromiumFixture(DesktopSession):
+                def _app_command(self, home, workspace):
+                    command, files = super()._app_command(home, workspace)
+                    if not any(str(arg).startswith("--user-data-dir=") for arg in command):
+                        raise unittest.SkipTest("Requires a Chromium browser for the test TLS pin")
+                    return [*command[:-1], f"--ignore-certificate-errors-spki-list={pin}", command[-1]], files
+
+            with (patch("parallel_computer_use._network._resolve", return_value=("1.1.1.1",)),
+                  patch("parallel_computer_use._network._open_upstream",
+                        side_effect=lambda _: socket.create_connection(("127.0.0.1", fixture.port), 4))):
+                with ChromiumFixture("browser", width=640, height=480, browser_observer=True,
+                                     allowed_domains=("catalog.example", "assets.example"),
+                                     start_url="https://catalog.example/live?q=seed") as desk:
+                    start = desk.browser_state()
+                    self.assertEqual(start["page"], "https://catalog.example/live")
+                    self.assertIn("Search results", start["text"])
+                    self.assertIn("https://catalog.example/live/next", start["text"])
+                    self.assertNotIn("?lab=", start["text"])
+                    self.assertEqual(start["count"], 2)
+                    self.assertFalse(desk.browser_click(start["revision"], "https://catalog.example/live/next"))
+                    self.assertFalse(desk.browser_click(desk.browser_state()["revision"], "https://assets.example/other"))
+                    start = desk.browser_state()
+                    self.assertTrue(desk.browser_click(start["revision"], "https://catalog.example/live/plain"))
+                    until = time.monotonic() + 5
+                    while time.monotonic() < until:
+                        page = desk.browser_state()
+                        if page and page["page"] == "https://catalog.example/live/plain":
+                            break
+                        time.sleep(0.04)
+                    else:
+                        self.fail("Observer did not reach the expected public chapter")
+                    self.assertIn("Chapter reached.", page["text"])
+                    self.assertFalse(desk.browser_click(start["revision"], "e1"))
 
     @unittest.skipUnless(os.environ.get("PCU_TEST_DESKTOP") == "1", "opt in with PCU_TEST_DESKTOP=1")
     def test_simultaneous_browser_profiles_have_distinct_cookies_and_persist(self):

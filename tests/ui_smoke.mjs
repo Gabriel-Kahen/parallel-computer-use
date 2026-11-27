@@ -269,6 +269,56 @@ async function smoke() {
     ].join(" "));
     await wait('smokeLaunches.length === 3 && !launching');
     assert(await evaluate('smokeLaunches[2].assignments[0].observe_only === true && !("observe_only" in smokeLaunches[2].assignments[1])'));
+
+    await evaluate(`
+      state.providers = state.providers.map(item => item.id === "gemini"
+        ? { ...item, configured: true, has_desktop: false } : item);
+      render();
+      $("worker-count").value = 5;
+      $("session-template").value = "auto";
+      assignWorkers();
+      globalThis.workerFields = Array.from($("assignments-list").children).map(row => ({
+        url: row.querySelector("[data-field=start-url]"),
+        template: row.querySelector("[data-field=template]"),
+        provider: row.querySelector("[data-field=provider]")
+      }));
+      workerFields[1].template.value = "browser";
+      workerFields[2].template.value = "auto";
+      workerFields[3].url.value = "stale invalid URL";
+      workerFields[3].template.value = "editor";
+      showProvider();
+    `);
+    assert(await evaluate('workerFields[3].url.disabled && workerFields[3].url.parentElement.hidden'));
+    assert(await evaluate(`(() => {
+      state.network_domains = [];
+      showProvider();
+      const unavailable = $("start-url").disabled && workerFields.every(row => row.url.disabled);
+      state.network_domains = ["example.invalid"];
+      showProvider();
+      return unavailable;
+    })()`));
+    await evaluate(`
+      workerFields[3].template.value = "";
+      workerFields[3].provider.value = "gemini";
+      showProvider();
+      $("cloud-consent").checked = true;
+      $("start-url").value = "https://example.invalid/default";
+      ["one", "two", "three"].forEach((query, index) => {
+        workerFields[index].url.value = "https://example.invalid/search?q=" + query;
+      });
+      $("prompt").value = "Separate browser start URLs";
+      $("run-form").requestSubmit();
+    `);
+    assert(await evaluate('workerFields[3].url.disabled && workerFields[3].url.parentElement.hidden'));
+    await wait('smokeLaunches.length === 4 && !launching');
+    const browserRun = await evaluate('smokeLaunches[3]');
+    assert.equal(browserRun.start_url, "https://example.invalid/default");
+    assert.equal(browserRun.mode, "manual");
+    assert.deepEqual(browserRun.assignments.slice(0, 3).map(worker => worker.template), ["auto", "browser", "auto"]);
+    assert.deepEqual(browserRun.assignments.map(worker => worker.start_url), [
+      "https://example.invalid/search?q=one", "https://example.invalid/search?q=two",
+      "https://example.invalid/search?q=three", "", undefined
+    ]);
     assert.deepEqual(cdp.errors, []);
   } finally {
     cdp.socket.close();

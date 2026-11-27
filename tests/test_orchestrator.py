@@ -6,6 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import patch
 
+from parallel_computer_use._network import validate_network_target
 from parallel_computer_use.orchestrator import Job, Orchestrator, RequestError, Run, TERMINAL
 from parallel_computer_use.providers import DecisionUsage, ProviderResponseError
 from parallel_computer_use.store import Store
@@ -523,6 +524,67 @@ class OrchestratorTest(unittest.TestCase):
         self.assertNotIn("click_ref", provider.verify_directives)
         self.assertIn("After input, the application shows this status: Applied", provider.prompts[1])
 
+    def test_navigation_to_a_new_page_uses_text_verification_without_another_click(self):
+        class ReferenceProvider(GateProvider):
+            def decide_with_usage(self, prompt, image, cancel, *, directives):
+                self.prompts.append(prompt)
+                self.images.append(image)
+                if len(self.prompts) == 1:
+                    return {"type": "click_ref", "target": "e1"}, DecisionUsage()
+                self.verify_directives.append(directives)
+                if len(self.prompts) == 2:
+                    return {"type": "wait", "seconds": 0}, DecisionUsage()
+                return {"type": "done", "result": "Read chapter"}, DecisionUsage()
+
+        def state(desktop):
+            visited = bool(desktop.actions) and len(provider.prompts) >= 2
+            return {"text": "h1 Chapter" if visited else "a Reference [e1]", "count": 1, "revision": 19,
+                    "visual": visited, "status": "", "page": "https://docs.example/" + ("chapter" if visited else "search")}
+
+        def click(desktop, revision, target):
+            desktop.actions.append(target)
+            return True
+
+        provider = ReferenceProvider()
+        provider.verify_directives = []
+        with (patch.object(FakeDesktop, "browser_state", state, create=True),
+              patch.object(FakeDesktop, "browser_click", click, create=True)):
+            app = self.build({"local": provider}, observation_mode="targeted")
+            run = app.start_run({"prompt": "Open and check the chapter", "template": "browser"})
+            self.wait_for(lambda: app.runs[run].jobs[0].status == "completed")
+        self.assertEqual(self.desktops[0].actions, ["e1"])
+        self.assertEqual(provider.images, [None, None, None])
+        for directives in provider.verify_directives:
+            self.assertNotIn("click_ref", directives)
+            self.assertNotIn("click_link", directives)
+        self.assertIn("Wait if it is still loading.", provider.prompts[1])
+        self.assertIn("https://docs.example/chapter", provider.prompts[2])
+        self.assertIn("previous action opened a new browser page", provider.prompts[2])
+        self.assertIn("Previous visible link (page data): Reference", provider.prompts[2])
+
+    def test_online_pixel_worker_rechecks_a_changed_page_before_reporting_a_blocker(self):
+        class LoadingProvider(GateProvider):
+            def decide(self, prompt, image, cancel):
+                self.prompts.append(prompt)
+                self.images.append(image)
+                if len(self.images) == 1:
+                    self.entered.set()
+                    self.release.wait(3)
+                    return {"type": "blocked", "reason": "Search has not rendered"}
+                return {"type": "done", "result": "Found the listing"}
+
+        provider = LoadingProvider()
+        app = self.build({"local": provider}, network_domains=("docs.example",),
+                         validate_browser_url=validate_network_target)
+        run = app.start_run({"prompt": "Find the visible result", "start_url": "https://docs.example/search",
+                             "template": "browser", "observe_only": True})
+        self.assertTrue(provider.entered.wait(3))
+        self.desktops[0].actions.append("Page rendered")
+        provider.release.set()
+        self.wait_for(lambda: app.runs[run].jobs[0].status == "completed")
+        self.assertEqual(provider.images, [b"frame:0", b"frame:1"])
+        self.assertIn("Inspect the latest frame before reporting a blocker", provider.prompts[1])
+
     def test_unacknowledged_browser_click_requires_verification_without_status(self):
         class ReferenceProvider(GateProvider):
             def decide(self, prompt, image, cancel):
@@ -583,6 +645,29 @@ class OrchestratorTest(unittest.TestCase):
         self.assertEqual(provider.images, [b"crop", None])
         self.assertEqual(self.desktops[0].actions, [])
         self.assertIn("After input, the application shows this status: Already applied", provider.prompts[-1])
+
+    def test_targeted_click_cannot_reach_a_replaced_document_with_the_same_visible_path(self):
+        class PointProvider(GateProvider):
+            def decide(self, prompt, image, cancel):
+                self.images.append(image)
+                self.prompts.append(prompt)
+                if len(self.images) == 1:
+                    return {"type": "click", "x": 10, "y": 20}
+                return {"type": "done", "result": "Inspected"}
+
+        original = {"text": "h1 Drawing", "visual": True, "count": 0, "revision": 19,
+                    "document": 1, "page": "https://docs.example/drawing"}
+        replacement = {**original, "document": 2, "revision": 20}
+        provider = PointProvider()
+        with (patch.object(FakeDesktop, "browser_state", side_effect=[original, replacement, replacement], create=True),
+              patch.object(FakeDesktop, "browser_crop_region", return_value=(100, 100, 300, 200), create=True),
+              patch.object(FakeDesktop, "browser_canvas_contains", return_value=True, create=True)):
+            app = self.build({"local": provider}, observation_mode="targeted")
+            run = app.start_run({"prompt": "Inspect the drawing", "template": "browser"})
+            self.wait_for(lambda: app.runs[run].jobs[0].status == "completed")
+        self.assertEqual(provider.images, [b"crop", None])
+        self.assertEqual(self.desktops[0].actions, [])
+        self.assertIn("The browser document changed.", provider.prompts[-1])
 
     def test_nested_zoom_is_rejected_and_reobserves_overview(self):
         class RepeatZoomProvider(GateProvider):

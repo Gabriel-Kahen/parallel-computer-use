@@ -411,7 +411,7 @@ def main(argv=None):
     server.add_argument("--codex-account", default=app_environment("CODEX_ACCOUNT"))
     server.add_argument("--desktop-mode", choices=("sandbox", "host-private"), default="sandbox")
     server.add_argument("--observation-mode", choices=OBSERVATION_MODES, default="pixels",
-                        help="Opt-in local observer experiment. Browser observers cover the offline Chromium catalog.")
+                        help="Opt-in local observer experiment for ephemeral Chromium workers and optional OCR.")
     server.add_argument("--model-pointer-units", choices=("pixels", "normalized"),
                         help="Fix the coordinate convention for local model pointer actions.")
     server.add_argument("--allow-domain", action="append", default=[],

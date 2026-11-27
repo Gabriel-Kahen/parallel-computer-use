@@ -30,7 +30,8 @@ _PNG = b"\x89PNG\r\n\x1a\n"
 _T = TypeVar("_T")
 _DIRECTIVE_TYPES = (
     "plan", "click", "drag", "move", "scroll", "key", "type",
-    "wait", "message", "handoff", "done", "blocked", "batch", "zoom", "overview", "visual", "click_ref", "continue",
+    "wait", "message", "handoff", "done", "blocked", "batch", "zoom", "overview", "visual", "click_ref", "click_link",
+    "continue",
 )
 _DIRECTIVE_SCHEMA = {
     "type": "object",
@@ -40,6 +41,7 @@ _DIRECTIVE_SCHEMA = {
         "reason": {"type": "string"},
         "text": {"type": "string"},
         "target": {"type": "string"},
+        "url": {"type": "string"},
     },
     "required": ["type"],
     "additionalProperties": True,

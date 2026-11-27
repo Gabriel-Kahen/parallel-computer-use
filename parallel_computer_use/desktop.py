@@ -167,10 +167,11 @@ class DesktopSession:
         if browser_profile is not None and (template != "browser" or mode != "sandbox"):
             raise ValueError("Persistent profiles require the sandboxed browser template")
         domains = normalize_domains(allowed_domains)
+        observer_domains = ()
         if start_url is not None:
             if template != "browser" or mode != "sandbox":
                 raise ValueError("HTTPS browsing requires the sandboxed browser template")
-            validate_network_target(start_url, domains)
+            observer_domains = (validate_network_target(start_url, domains),)
         self.template, self.mode = template, mode
         self.start_url = start_url
         self._native_argv = native_argv
@@ -183,7 +184,8 @@ class DesktopSession:
         self._browser_request_id = 0
         self._browser_pending = bytearray()
         self._browser_observer = (browser_observer and template == "browser" and mode == "sandbox"
-                                  and start_url is None and browser_profile is None)
+                                  and browser_profile is None)
+        self._observer_domains = observer_domains
         self._network_proxy = None
         self._browser_profile = None
         self._workspace_fd = None
@@ -329,7 +331,7 @@ class DesktopSession:
         chromium = shutil.which("chromium", path=_PATH) or shutil.which("chromium-browser", path=_PATH)
         if chromium is None and os.access(_CHROME, os.X_OK):
             chromium = str(_CHROME)
-        if engine == "chromium" or (firefox is None and engine != "firefox"):
+        if engine == "chromium" or (engine is None and (firefox is None or (self._browser_observer and chromium))):
             if chromium is None:
                 raise DesktopError("Install the required Firefox or Chromium browser")
             self._profile_engine("chromium")
@@ -339,16 +341,19 @@ class DesktopSession:
                 "--disable-background-networking", "--disable-sync", "--disable-gpu",
                 "--ozone-platform=x11",
             ]
-            if self._network_proxy is None:
-                arguments += ["--app=" + url]
-            else:
+            if self._network_proxy is not None:
                 arguments += [
                     f"--proxy-server=http://127.0.0.1:{GUEST_PROXY_PORT}",
                     "--proxy-bypass-list=<-loopback>", "--disable-http2", "--disable-quic",
-                    "--disable-features=EncryptedClientHello", "--start-maximized", url,
+                    "--disable-features=EncryptedClientHello",
                 ]
+            if self._network_proxy is None or self._browser_observer:
+                arguments += ["--app=" + url]
+            else:
+                arguments += ["--start-maximized", url]
             if self._browser_observer:
-                arguments = [_binary("python3"), "-I", "/opt/pcu/_browser.py", url, *arguments]
+                arguments = [_binary("python3"), "-I", "/opt/pcu/_browser.py", url,
+                             json.dumps(self._observer_domains), *arguments]
             return arguments, browser_files
         if firefox is None:
             raise DesktopError("This browser profile requires Firefox")
@@ -428,11 +433,20 @@ class DesktopSession:
             if channel is not None:
                 channel.close()
         deadline = time.monotonic() + (12 if self.template == "browser" else 5)
+        browser_ready_by = None
         while time.monotonic() < deadline and self.alive:
             observation = self._observe()
             if observation["active_window"] and observation["focus"] not in (0, 1, observation["root"]):
                 if self.template == "editor":
                     if self._helper("editor-ready", int(_EDITOR_FOREGROUND[1:], 16)) == b"1":
+                        return
+                elif self.start_url is not None and self._browser_observer:
+                    browser_ready_by = browser_ready_by or min(deadline, time.monotonic() + 2.5)
+                    state = self.browser_state()
+                    if state and state.get("ready") == "complete" and state["text"].strip():
+                        self.browser_frame_ready()
+                        return
+                    if time.monotonic() >= browser_ready_by:
                         return
                 elif (self.template != "browser" or self.start_url is not None or
                       self._helper("catalog-ready") == b"1"):
@@ -588,12 +602,22 @@ class DesktopSession:
                 and type(state.get("revision")) is int and type(state.get("count")) is int
                 and type(state.get("visual")) is bool and isinstance(state.get("status"), str)
                 and len(state["status"]) <= 160):
+            if self._observer_domains:
+                try:
+                    validate_network_target(state.get("page"), self._observer_domains)
+                except ValueError:
+                    return None
+                if type(state.get("document")) is not int or any(separator in state["page"] for separator in "?#"):
+                    return None
             return state
         return None
 
     def browser_click(self, revision, target):
         result = self._browser_request("click", revision, target)
         return result if type(result) is bool else None
+
+    def browser_frame_ready(self):
+        return self._browser_request("paint") is True
 
     def browser_crop_region(self, state):
         """Map one canvas to root pixels when Chromium and X11 agree exactly."""

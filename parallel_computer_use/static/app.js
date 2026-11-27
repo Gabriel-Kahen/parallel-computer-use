@@ -269,14 +269,22 @@ function providerItems() {
   }));
 }
 
+function supportsDesktop(provider) {
+  const option = state.providers.find(item => item.id === provider);
+  return option?.configured && (option.has_desktop ?? (provider !== "codex"));
+}
+
+function templateItems() {
+  return [{ id: "auto", label: "Automatic" }, ...state.templates.filter(template => template.id !== "auto")];
+}
+
 function renderRunOptions() {
   const signature = JSON.stringify([state.providers, state.templates, state.limits, state.browser_profiles]);
   if (configuredOptions === signature) return;
   configuredOptions = signature;
   const local = state.providers.find(provider => provider.configured && !provider.cloud);
   setOptions($("provider"), providerItems(), local?.id);
-  const templates = [{ id: "auto", label: "Automatic" }, ...state.templates.filter(template => template.id !== "auto")];
-  setOptions($("session-template"), templates, "auto");
+  setOptions($("session-template"), templateItems(), "auto");
   setOptions($("browser-profile"), [
     { id: "", label: "Temporary profile" },
     ...(state.browser_profiles || []).map(profile => ({ id: profile, label: profile }))
@@ -325,6 +333,14 @@ function assignWorkers(resetConsent = false) {
       const fields = document.createElement("div");
       fields.className = "option-fields";
       fields.append(optionSelect("Provider", "provider"), optionSelect("Template", "template"));
+      const urlLabel = document.createElement("label");
+      const url = document.createElement("input");
+      url.type = "url";
+      url.dataset.field = "start-url";
+      url.placeholder = "Inherit run URL";
+      url.maxLength = 1536;
+      url.setAttribute("aria-describedby", "start-url-help");
+      urlLabel.append("Browser start URL (optional)", url);
       const observeLabel = document.createElement("label");
       observeLabel.className = "observe-only";
       const observe = document.createElement("input");
@@ -336,7 +352,7 @@ function assignWorkers(resetConsent = false) {
       observeNote.textContent = "The model may read the desktop. Desktop input is manual.";
       observeText.append("Observe only ", observeNote);
       observeLabel.append(observe, observeText);
-      item.append(promptLabel, fields, observeLabel);
+      item.append(promptLabel, fields, urlLabel, observeLabel);
       if (i > 0) {
         const after = document.createElement("label");
         const dependency = document.createElement("input");
@@ -352,7 +368,7 @@ function assignWorkers(resetConsent = false) {
     if (item.dataset.options !== configuredOptions) {
       setOptions(item.querySelector('[data-field="provider"]'), [{ id: "", label: "Inherit run provider" }, ...providerItems()]);
       setOptions(item.querySelector('[data-field="template"]'), [
-        { id: "", label: "Inherit run template" }, ...state.templates.filter(template => template.id !== "auto")
+        { id: "", label: "Inherit run template" }, ...templateItems()
       ]);
       item.dataset.options = configuredOptions;
     }
@@ -363,14 +379,18 @@ function assignWorkers(resetConsent = false) {
 
 function assignmentRows() {
   const count = Number($("worker-count").value);
-  return Array.from($("assignments-list").children).slice(0, count).map((item, index) => ({
-    title: "Worker " + (index + 1),
-    prompt: item.querySelector("textarea").value.trim(),
-    provider: item.querySelector('[data-field="provider"]').value,
-    template: item.querySelector('[data-field="template"]').value,
-    dependencies: item.querySelector('[data-field="dependencies"]')?.value.trim() || "",
-    observeOnly: item.querySelector('[data-field="observe"]').checked
-  }));
+  return Array.from($("assignments-list").children).slice(0, count).map((item, index) => {
+    const url = item.querySelector('[data-field="start-url"]');
+    return {
+      title: "Worker " + (index + 1),
+      prompt: item.querySelector("textarea").value.trim(),
+      provider: item.querySelector('[data-field="provider"]').value,
+      template: item.querySelector('[data-field="template"]').value,
+      startUrl: url.disabled ? "" : url.value.trim(),
+      dependencies: item.querySelector('[data-field="dependencies"]')?.value.trim() || "",
+      observeOnly: item.querySelector('[data-field="observe"]').checked
+    };
+  });
 }
 
 function showProvider(resetConsent = false) {
@@ -396,13 +416,20 @@ function showProvider(resetConsent = false) {
     $("cloud-consent").checked = false;
     $("share-results").checked = false;
   }
-  const usesBrowser = assignments.some(assignment => browserTemplates.has(assignment.template || template))
-    || (assignments.length < count && browserTemplates.has(template));
+  const browserAssignments = assignments.map(assignment =>
+    browserTemplates.has(assignment.template || template) && supportsDesktop(assignment.provider || id));
+  const usesBrowser = browserAssignments.some(Boolean)
+    || (assignments.length < count && browserTemplates.has(template) && supportsDesktop(id));
   const domains = state.network_domains || [];
+  Array.from($("assignments-list").children).forEach((item, index) => {
+    const url = item.querySelector('[data-field="start-url"]');
+    url.disabled = !(browserAssignments[index] && domains.length);
+    url.parentElement.hidden = url.disabled;
+  });
   const supportsStartUrl = usesBrowser && domains.length > 0;
   $("start-url-field").hidden = !supportsStartUrl;
   $("start-url").disabled = !supportsStartUrl;
-  setText($("start-url-help"), domains.length ? "Applies to browser workers on " + domains.join(", ") + "." : "");
+  setText($("start-url-help"), domains.length ? "Use HTTPS on " + domains.join(", ") + "." : "");
   const supportsProfile = usesBrowser && !!state.browser_profiles?.length;
   $("browser-profile-wrap").hidden = !supportsProfile;
   $("browser-profile").disabled = !supportsProfile;
@@ -1326,7 +1353,7 @@ async function launchRun(event) {
     announce("Use earlier worker numbers separated by commas.", true);
     return;
   }
-  if (assignments.some(assignment => assignment.prompt || assignment.provider || assignment.template || assignment.dependencies || assignment.observeOnly)) {
+  if (assignments.some(assignment => assignment.prompt || assignment.provider || assignment.template || assignment.startUrl || assignment.dependencies || assignment.observeOnly)) {
     request.mode = "manual";
     request.assignments = Array.from({ length: request.count }, (_, index) => {
       const assignment = assignments[index];
@@ -1337,6 +1364,11 @@ async function launchRun(event) {
         template: assignment?.template || request.template,
         depends_on: dependencies[index] || []
       };
+      if (assignment?.startUrl) worker.start_url = assignment.startUrl;
+      if (browserTemplates.has(worker.template) && !supportsDesktop(worker.provider)) {
+        if (request.start_url) worker.start_url = "";
+        if (request.browser_profile) worker.browser_profile = null;
+      }
       if (assignment?.observeOnly) worker.observe_only = true;
       return worker;
     });
@@ -1398,6 +1430,12 @@ $("assignments-list").addEventListener("change", event => {
   if (event.target.dataset.field === "provider") showProvider(true);
   else if (event.target.dataset.field === "template") showProvider();
 });
+$("assignments-list").addEventListener("invalid", event => {
+  if (event.target.dataset.field === "start-url") {
+    showRunOptions(true);
+    $("assignments-section").open = true;
+  }
+}, true);
 $("all-workers").addEventListener("click", () => selectRun(null));
 $("new-run").addEventListener("click", () => {
   showProvider(true);
