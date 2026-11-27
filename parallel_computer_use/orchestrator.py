@@ -231,7 +231,7 @@ class Orchestrator:
                 self._save(run, "recovery", "Interrupted work was recorded without replaying desktop actions.")
         self._prune_memory()
 
-        self.scheduler = threading.Thread(target=self._schedule, name="lcu-scheduler", daemon=True)
+        self.scheduler = threading.Thread(target=self._schedule, name="pcu-scheduler", daemon=True)
         self.scheduler.start()
 
     def _register(self, run):
@@ -273,9 +273,9 @@ class Orchestrator:
         self.revision += 1
         if self.notify:
             if kind != "recovery" and previous != run.status and run.status in TERMINAL | {"partial"}:
-                self.notify("Local Computer Use", run.summary.splitlines()[0])
+                self.notify("Parallel Computer Use", run.summary.splitlines()[0])
             if kind == "awaiting_input" and job:
-                self.notify("Local Computer Use", f"{job.title} needs your input.")
+                self.notify("Parallel Computer Use", f"{job.title} needs your input.")
 
     def _transition(self, job, status, detail, kind=None):
         job.status, job.detail = status, detail
@@ -494,7 +494,7 @@ class Orchestrator:
     def _start_coordinator(self, run, target, *args):
         cancel = threading.Event()
         thread = threading.Thread(target=target, args=(run, cancel, *args),
-                                  name="lcu-coordinator", daemon=True)
+                                  name="pcu-coordinator", daemon=True)
         self.planners[run.id] = (thread, cancel)
         thread.start()
 
@@ -540,7 +540,7 @@ class Orchestrator:
             detail = "Receiving an existing desktop."
         self._transition(job, "starting", detail)
         session.thread = threading.Thread(target=self._work, args=(job, session),
-                                          name=f"lcu-{job.id[:8]}", daemon=True)
+                                          name=f"pcu-{job.id[:8]}", daemon=True)
         session.thread.start()
 
     def _desktop_count(self):

@@ -62,7 +62,7 @@ def wait_for_manager(manager):
 
 
 def start_network_bridge(port):
-    bridge = subprocess.Popen([sys.executable, "-I", "/opt/lcu/_network.py", "bridge"])
+    bridge = subprocess.Popen([sys.executable, "-I", "/opt/pcu/_network.py", "bridge"])
     deadline = time.monotonic() + 2
     while bridge.poll() is None and time.monotonic() < deadline:
         try:

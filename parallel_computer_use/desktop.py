@@ -123,7 +123,7 @@ def _environment(home, workspace):
         "MOZ_ENABLE_WAYLAND": "0",
         "LIBGL_ALWAYS_SOFTWARE": "1",
         # Disallow accidentally starting another real user bus or reaching the host bus.
-        "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/run/lcu-no-system-bus",
+        "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/run/pcu-no-system-bus",
     }
 
 
@@ -181,7 +181,7 @@ class DesktopSession:
         self._network_proxy = None
         self._browser_profile = None
         self._workspace_fd = None
-        self._temporary = tempfile.TemporaryDirectory(prefix="lcu-", dir="/tmp")
+        self._temporary = tempfile.TemporaryDirectory(prefix="pcu-", dir="/tmp")
         self._root = Path(self._temporary.name)
         self.display = ""
         self.workspace = Path(workspace).absolute() if workspace is not None else self._root / "work"
@@ -307,11 +307,11 @@ class DesktopSession:
                 if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                     raise DesktopError("Editor input must be a regular, unlinked workspace file")
             return [
-                _binary("xterm"), "-class", "LCUEditor", "-title", "Session editor",
+                _binary("xterm"), "-class", "PCUEditor", "-title", "Session editor",
                 "-fa", "Monospace", "-fs", "13", "-b", "2",
                 "-bg", "#f8f8f8", "-fg", _EDITOR_FOREGROUND,
-                "-xrm", "LCUEditor*selectToClipboard: true",
-                "-xrm", "LCUEditor*VT100.translations: #override\nShift <Key>Insert: insert-selection(CLIPBOARD)",
+                "-xrm", "PCUEditor*selectToClipboard: true",
+                "-xrm", "PCUEditor*VT100.translations: #override\nShift <Key>Insert: insert-selection(CLIPBOARD)",
                 "-e", _binary("nano"), "-I", "-R", workspace / filename,
             ], None
         if self.mode != "sandbox":
@@ -376,7 +376,7 @@ class DesktopSession:
 
     @staticmethod
     def _write_firefox_settings(profile, settings):
-        fd, staged = tempfile.mkstemp(prefix=".lcu-settings-", dir=profile)
+        fd, staged = tempfile.mkstemp(prefix=".pcu-settings-", dir=profile)
         try:
             with os.fdopen(fd, "w", encoding="ascii") as file:
                 for key, value in settings.items():
@@ -403,9 +403,9 @@ class DesktopSession:
         environment = _environment(home, workspace)
         environment.update(DISPLAY=self.display, XAUTHORITY=str(self._auth))
         if sandbox:
-            environment["XAUTHORITY"] = "/run/lcu.auth"
+            environment["XAUTHORITY"] = "/run/pcu.auth"
             command = self._sandbox(browser_files) + [
-                *bus, "/opt/lcu/_spawn.py", "guest", wm, network_port, *app
+                *bus, "/opt/pcu/_spawn.py", "guest", wm, network_port, *app
             ]
         else:
             command = [*bus, _SPAWN, "guest", wm, network_port, *app]
@@ -429,12 +429,12 @@ class DesktopSession:
         command = [
             _binary("bwrap"), "--unshare-user", "--unshare-pid", "--unshare-net",
             "--unshare-ipc", "--unshare-uts", "--cap-drop", "ALL", "--die-with-parent",
-            "--new-session", "--hostname", "lcu", "--ro-bind", "/usr", "/usr",
+            "--new-session", "--hostname", "pcu", "--ro-bind", "/usr", "/usr",
             "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run",
             "--dir", "/tmp/.X11-unix", "--dir", "/etc", "--dir", "/home", "--dir", "/opt",
-            "--ro-bind", _SPAWN, "/opt/lcu/_spawn.py",
+            "--ro-bind", _SPAWN, "/opt/pcu/_spawn.py",
             "--bind", self._home, "/home/worker", "--bind", self.workspace, "/work",
-            "--ro-bind", self._auth, "/run/lcu.auth", "--chdir", "/work",
+            "--ro-bind", self._auth, "/run/pcu.auth", "--chdir", "/work",
         ]
         if self.template != "browser":
             command += ["--disable-userns"]
@@ -476,10 +476,10 @@ class DesktopSession:
                 "QuicAllowed": False,
             }), encoding="ascii")
             command += [
-                "--ro-bind", _NETWORK, "/opt/lcu/_network.py",
+                "--ro-bind", _NETWORK, "/opt/pcu/_network.py",
                 "--ro-bind", self._network_proxy.path, GUEST_PROXY_SOCKET,
-                "--ro-bind", policy, "/etc/chromium/policies/managed/lcu.json",
-                "--ro-bind", policy, "/etc/opt/chrome/policies/managed/lcu.json",
+                "--ro-bind", policy, "/etc/chromium/policies/managed/pcu.json",
+                "--ro-bind", policy, "/etc/opt/chrome/policies/managed/pcu.json",
             ]
         return command
 

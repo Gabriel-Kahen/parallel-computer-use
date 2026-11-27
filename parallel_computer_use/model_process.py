@@ -27,7 +27,7 @@ class ManagedModel:
         self.gpu_device = gpu_device
         if gpu_layers and gpu_device is None and os.environ.get("CUDA_VISIBLE_DEVICES") in ("", "-1"):
             raise ValueError("CUDA is hidden in this environment. Use --gpu-device for CUDA or --gpu-layers 0 for CPU.")
-        self.alias = f"lcu-{uuid4().hex[:12]}"
+        self.alias = f"pcu-{uuid4().hex[:12]}"
         self.api_key = secrets.token_urlsafe(32)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
             reservation.bind(("127.0.0.1", 0))
@@ -78,7 +78,7 @@ class ManagedModel:
                      "--alias", self.alias, "--host", "127.0.0.1", "--port", str(self.port),
                      "--api-key-file", f"/proc/self/fd/{key_fd}", *self.options]
         environment = {key: value for key, value in os.environ.items()
-                       if not key.startswith(("LCU_", "LLAMA_ARG_")) and key not in {
+                       if not key.startswith(("PCU_", "LCU_", "LLAMA_ARG_")) and key not in {
                            "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
                            "ANTHROPIC_API_KEY", "HF_TOKEN",
                        }}

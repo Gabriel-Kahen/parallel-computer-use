@@ -18,9 +18,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from local_computer_use import providers
-from local_computer_use.desktop import DesktopSession
-from local_computer_use.orchestrator import Orchestrator, TERMINAL
+from parallel_computer_use import providers
+from parallel_computer_use.desktop import DesktopSession
+from parallel_computer_use.orchestrator import Orchestrator, TERMINAL
 
 
 COLORS = {"red": b"\xff\x00\x00", "green": b"\x00\xff\x00", "blue": b"\x00\x00\xff"}
@@ -95,14 +95,14 @@ def llama_server(args, slots):
         began = time.monotonic()
         process = subprocess.Popen([
             str(args.server), "--model", str(args.gguf), "--mmproj", str(args.projector),
-            "--host", "127.0.0.1", "--port", str(port), "--alias", "lcu-benchmark",
+            "--host", "127.0.0.1", "--port", str(port), "--alias", "pcu-benchmark",
             "--ctx-size", str(args.context), "--parallel", str(slots), "--n-gpu-layers", "all",
             "--flash-attn", "off", "--no-webui",
         ], stdout=log, stderr=subprocess.STDOUT, env={**os.environ, "CUDA_VISIBLE_DEVICES": str(args.gpu)})
         try:
             while process.poll() is None and time.monotonic() - began < 35:
                 if ready(port):
-                    yield providers.LlamaProvider("lcu-benchmark", f"http://127.0.0.1:{port}/v1", timeout=15), (
+                    yield providers.LlamaProvider("pcu-benchmark", f"http://127.0.0.1:{port}/v1", timeout=15), (
                         time.monotonic() - began
                     )
                     break
@@ -184,7 +184,7 @@ def desktop_tasks(provider):
         'Ctrl+S saves the existing file directly. Once "Pressed a key." is recorded or the footer says '
         '"Wrote 1 line", report done. Do not use the Write Out dialog.'
     )
-    with tempfile.TemporaryDirectory(prefix="lcu-vlm-edit-") as state:
+    with tempfile.TemporaryDirectory(prefix="pcu-vlm-edit-") as state:
         app = Orchestrator(
             Path(state), lambda template, workspace: DesktopSession(template, workspace=workspace, **viewport),
             {"local": tracked}, sessions=1, inference=1, memory_floor=0,

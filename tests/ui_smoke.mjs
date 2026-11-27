@@ -12,11 +12,11 @@ const chrome = process.env.CHROME_BIN || [
   "/opt/google/chrome/chrome", "/usr/bin/chromium", "/usr/bin/google-chrome", "/usr/bin/chromium-browser"
 ].find(existsSync);
 assert(chrome && typeof WebSocket === "function", "Run this smoke test with Node 22+ and Chrome or Chromium.");
-const output = mkdtempSync(join(tmpdir(), "lcu-ui-smoke-"));
+const output = mkdtempSync(join(tmpdir(), "pcu-ui-smoke-"));
 const data = join(output, "state");
 const profile = join(output, "chrome");
 mkdirSync(data, { mode: 0o700 });
-const service = spawn("python3", ["-m", "local_computer_use", "serve", "--demo", "--sessions", "3", "--max-workers", "6",
+const service = spawn("python3", ["-m", "parallel_computer_use", "serve", "--demo", "--sessions", "3", "--max-workers", "6",
   "--allow-domain", "example.invalid", "--browser-profile", "smoke-profile", "--state-dir", data]);
 const browser = spawn(chrome, ["--headless", "--disable-dev-shm-usage", "--disable-extensions", "--disable-background-networking",
   "--no-first-run", "--remote-debugging-port=0", "--user-data-dir=" + profile, "about:blank"]);
@@ -119,7 +119,7 @@ async function smoke() {
     };
 
     await wait('document.querySelector("#connection")?.dataset.status === "online"');
-    assert(await evaluate('!location.hash && !document.cookie && Boolean(sessionStorage.getItem("lcu_session"))'));
+    assert(await evaluate('!location.hash && !document.cookie && Boolean(sessionStorage.getItem("pcu_session"))'));
     assert(await evaluate('!$("grid-empty").hidden && $("share-results-wrap").hidden'));
     assert(await evaluate('$("session-template").value === "auto" && !$("start-url-field").hidden'));
     assert(await evaluate('!$("browser-profile-wrap").hidden && $("browser-profile").value === ""'));
@@ -191,7 +191,7 @@ async function smoke() {
     await evaluate('$("viewer-privacy").click()');
     await wait('$("viewer-privacy").getAttribute("aria-pressed") === "true" && control.privateFrame?.url && $("viewer-image").complete');
     assert(await evaluate('smokeTile.querySelector(".tile-image").hidden && $("viewer-takeover").disabled && !previews.has(viewerId)'));
-    assert(await evaluate('fetch("/api/frame/" + viewerId, { headers: apiHeaders() }).then(response => response.status === 204 && response.headers.get("X-LCU-Private") === "1")'));
+    assert(await evaluate('fetch("/api/frame/" + viewerId, { headers: apiHeaders() }).then(response => response.status === 204 && response.headers.get("X-PCU-Private") === "1")'));
     await capture("private");
     await evaluate('$("viewer-close").click()');
     await wait('!control && smokeTile.querySelector(".tile-owner").textContent === "Input: None" && smokeTile.querySelector(".tile-pause").disabled');

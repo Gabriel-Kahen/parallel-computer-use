@@ -3,7 +3,7 @@ import json
 import threading
 import unittest
 
-from local_computer_use.server import LocalServer
+from parallel_computer_use.server import LocalServer
 
 
 class App:

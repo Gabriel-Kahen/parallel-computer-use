@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 
 GUEST_PROXY_PORT = 3128
-GUEST_PROXY_SOCKET = "/run/lcu-proxy.sock"
+GUEST_PROXY_SOCKET = "/run/pcu-proxy.sock"
 _MAX_CONNECTIONS = 12
 _MAX_HEADERS = 8192
 _MAX_HELLO = 65536

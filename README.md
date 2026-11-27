@@ -1,4 +1,4 @@
-# Local Computer Use
+# Parallel Computer Use
 
 Run a team of AI agents from one Linux app. Prompt the team, watch every worker's desktop in a live grid, and step in when a decision needs you. Agents can exchange findings and hand off an open application while you keep using your own desktop. Local models are the default, with optional cloud providers for jobs you explicitly assign to them.
 
@@ -9,24 +9,26 @@ Run a team of AI agents from one Linux app. Prompt the team, watch every worker'
 The core app runs on Python 3.11+ with no third-party Python runtime packages. Install your distribution's Xvfb, X11 and XTEST libraries, Bubblewrap, i3, D-Bus tools, xterm, nano, and xclip. Use Firefox, Chromium, or Google Chrome for browser workers. Enable unprivileged user namespaces for the sandbox. Verify the installed components, then start a scripted run without a model:
 
 ```sh
-python3 -m local_computer_use doctor
-python3 -m local_computer_use serve --demo
+python3 -m parallel_computer_use doctor
+python3 -m parallel_computer_use serve --demo
 ```
 
-Open the one-use loopback link from the terminal. The dashboard lets you enter a prompt, switch between automatic and fixed grid layouts, open a live session, and take manual control. Choose Observe only in a worker assignment to let its model inspect and report without sending input. Close the dashboard to leave the service running. Use `python3 -m local_computer_use open` to reconnect, `status` to see worker counts, and `stop-all` to cancel work. Stop the service with Ctrl+C in its launch terminal. The same commands are available under `local-computer-use` after `pip install .`.
+Open the one-use loopback link from the terminal. The dashboard lets you enter a prompt, switch between automatic and fixed grid layouts, open a live session, and take manual control. Choose Observe only in a worker assignment to let its model inspect and report without sending input. Close the dashboard to leave the service running. Use `python3 -m parallel_computer_use open` to reconnect, `status` to see worker counts, and `stop-all` to cancel work. Stop the service with Ctrl+C in its launch terminal. The same commands are available under `parallel-computer-use` after `pip install .`.
+
+New installs use `parallel-computer-use` under `$XDG_STATE_HOME` (default `~/.local/state`). Upgrades reuse the previous state folder and its saved profiles if the new folder does not exist. Use the `PCU_` prefix for service environment variables. Existing settings with the previous prefix are accepted as fallbacks.
 
 ### Local models
 
 Use a running loopback `llama-server`, or let the app manage one. Configure a compatible vision model and projector. The verified low-resource configuration used the official Qwen3-VL-2B-Instruct Q4_K_M and Q8_0 projector. On Volta, use a tested CUDA 12.x build of llama.cpp targeting compute capability 7.0. [Qwen GGUF files](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/tree/52d6c8ffea26cc873ac5ad116f8631268d7eb503) · [llama.cpp build guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
 
 ```sh
-python3 -m local_computer_use serve \
+python3 -m parallel_computer_use serve \
   --model-file /path/to/Qwen3VL-2B-Instruct-Q4_K_M.gguf \
   --mmproj /path/to/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf \
   --gpu-device 0 --sessions 3 --inference-slots 2
 ```
 
-Use `--llama-server /path/to/llama-server` if the executable is outside your path, `--gpu-layers 0` for CPU inference, or `--llama-url http://127.0.0.1:8080/v1 --model MODEL_ID` to use an existing server. The app generates a private loopback API key for managed models. For an existing server that requires a key, provide `LCU_LLAMA_API_KEY` in the service environment.
+Use `--llama-server /path/to/llama-server` if the executable is outside your path, `--gpu-layers 0` for CPU inference, or `--llama-url http://127.0.0.1:8080/v1 --model MODEL_ID` to use an existing server. The app generates a private loopback API key for managed models. For an existing server that requires a key, provide `PCU_LLAMA_API_KEY` in the service environment.
 
 Start with two inference slots on the tested V100. Choose a lower limit when using the GPU for foreground workloads. Separate desktop and inference caps let agents wait on an app while another agent uses the model.
 
@@ -34,7 +36,7 @@ For aggregate CPU, RAM, and process controls, use a systemd user scope with the 
 
 ```sh
 systemd-run --user --scope -p CPUWeight=20 -p MemoryHigh=1G -p MemoryMax=2G -p TasksMax=512 \
-  python3 -m local_computer_use serve --llama-url http://127.0.0.1:8080/v1 --model MODEL_ID
+  python3 -m parallel_computer_use serve --llama-url http://127.0.0.1:8080/v1 --model MODEL_ID
 ```
 
 ### Browser profiles and more applications
@@ -56,13 +58,13 @@ Use `--native-executable /usr/bin/gnome-calculator --native-label Calculator` to
 }
 ```
 
-The composer can copy up to four files totaling 256 KiB into each desktop's read-only imports directory. The Results panel lists saved workspace files for download. Set `--notifications` for passive desktop notifications through `notify-send`. With the service stopped, `python3 -m local_computer_use prune-history --older-than-days 30 --dry-run` counts eligible runs. Omit `--dry-run` to remove their history, inputs, and workspace files. Browser profiles are kept separately.
+The composer can copy up to four files totaling 256 KiB into each desktop's read-only imports directory. The Results panel lists saved workspace files for download. Set `--notifications` for passive desktop notifications through `notify-send`. With the service stopped, `python3 -m parallel_computer_use prune-history --older-than-days 30 --dry-run` counts eligible runs. Omit `--dry-run` to remove their history, inputs, and workspace files. Browser profiles are kept separately.
 
 ### Optional cloud accounts
 
 Codex runs as an optional text worker through OpenAI's documented ChatGPT-plan Responses flow. Install the `codex-auth` extra, connect an eligible account using `codex-login`, then start the app with `--codex-model MODEL_ID`. Use `codex-accounts` to find the account ID if several accounts are connected, and `--codex-account ID` when starting the service. `codex-logout --account ID` clears that connection. Codex's account and inference paths have deterministic fixtures. A live subscription sign-in has yet to be qualified. [OpenAI sign-in guide](https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt) · [Plan inference docs](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
 
-For Gemini, set `LCU_GEMINI_MODEL` and provide `LCU_GEMINI_API_KEY` in the service environment. Billing and quotas belong to your Google Cloud project. The account setting enables a provider option in the composer. Each run still needs explicit consent for cloud workers, and sharing dependency results with other providers takes a separate opt-in. [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)
+For Gemini, set `PCU_GEMINI_MODEL` and provide `PCU_GEMINI_API_KEY` in the service environment. Billing and quotas belong to your Google Cloud project. The account setting enables a provider option in the composer. Each run still needs explicit consent for cloud workers, and sharing dependency results with other providers takes a separate opt-in. [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)
 
 ## Contents
 
@@ -251,7 +253,7 @@ In an early trial, a second zoom hid a required catalog row and the model miscal
 For the validated short catalog workers, the managed-server flags were
 
 ```sh
-python3 -m local_computer_use serve \
+python3 -m parallel_computer_use serve \
   --llama-server /path/to/llama-server --model-file /path/to/Inkling-2-Mini-IQ4_NL.gguf \
   --mmproj /path/to/mmproj-Inkling-2-Mini-Q8_0.gguf --gpu-device 0 \
   --context-per-slot 6144 --inference-slots 2 --model-reasoning-budget 96 --model-max-tokens 384
@@ -380,7 +382,7 @@ Use scripted workers to isolate runtime overhead, then repeat with the model. Th
 
 ```sh
 python3 -m unittest discover -s tests
-LCU_TEST_DESKTOP=1 python3 -m unittest discover -s tests
+PCU_TEST_DESKTOP=1 python3 -m unittest discover -s tests
 node tests/ui_smoke.mjs
 ```
 

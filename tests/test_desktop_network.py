@@ -15,8 +15,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from local_computer_use._network import Denied, NetworkProxy, _resolve, validate_network_target
-from local_computer_use.desktop import DesktopError, DesktopSession
+from parallel_computer_use._network import Denied, NetworkProxy, _resolve, validate_network_target
+from parallel_computer_use.desktop import DesktopError, DesktopSession
 
 
 def tunnel(proxy, domain):
@@ -64,7 +64,7 @@ class NetworkPolicyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             proxy = NetworkProxy(Path(directory) / "proxy", ("catalog.example",))
             try:
-                with patch("local_computer_use._network._resolve") as resolver:
+                with patch("parallel_computer_use._network._resolve") as resolver:
                     client, response = tunnel(proxy.path, "another.example")
                     with client:
                         self.assertTrue(response.startswith(b"HTTP/1.1 403"))
@@ -124,8 +124,8 @@ class TLSFixture:
                     path = head.split(b" ")[1]
                     self.requests.put((path, message.lower()))
                     cookie = {
-                        b"/catalog?first=alpha": b"Set-Cookie: lcu_alpha=1; Max-Age=3600; Secure; Path=/\r\n",
-                        b"/catalog?first=beta": b"Set-Cookie: lcu_beta=1; Max-Age=3600; Secure; Path=/\r\n",
+                        b"/catalog?first=alpha": b"Set-Cookie: pcu_alpha=1; Max-Age=3600; Secure; Path=/\r\n",
+                        b"/catalog?first=beta": b"Set-Cookie: pcu_beta=1; Max-Age=3600; Secure; Path=/\r\n",
                     }.get(path, b"")
                     if cookie:
                         label = path.rsplit(b"=", 1)[-1]
@@ -169,8 +169,8 @@ class TLSProxyTest(unittest.TestCase):
             fixture = TLSFixture(root)
             proxy = NetworkProxy(root / "proxy", ("catalog.example",))
             try:
-                with (patch("local_computer_use._network._resolve", return_value=("1.1.1.1",)) as resolve,
-                      patch("local_computer_use._network._open_upstream",
+                with (patch("parallel_computer_use._network._resolve", return_value=("1.1.1.1",)) as resolve,
+                      patch("parallel_computer_use._network._open_upstream",
                             side_effect=lambda _: socket.create_connection(("127.0.0.1", fixture.port), 4)) as dial):
                     client, response = tunnel(proxy.path, "catalog.example")
                     with client:
@@ -185,13 +185,13 @@ class TLSProxyTest(unittest.TestCase):
                 proxy.close()
                 fixture.close()
 
-    @unittest.skipUnless(os.environ.get("LCU_TEST_DESKTOP") == "1", "opt in with LCU_TEST_DESKTOP=1")
+    @unittest.skipUnless(os.environ.get("PCU_TEST_DESKTOP") == "1", "opt in with PCU_TEST_DESKTOP=1")
     def test_browser_reaches_only_qualified_tls_fixture_through_bridge(self):
         with tempfile.TemporaryDirectory() as directory:
             fixture = TLSFixture(Path(directory))
             try:
-                with (patch("local_computer_use._network._resolve", return_value=("1.1.1.1",)) as resolve,
-                      patch("local_computer_use._network._open_upstream",
+                with (patch("parallel_computer_use._network._resolve", return_value=("1.1.1.1",)) as resolve,
+                      patch("parallel_computer_use._network._open_upstream",
                             side_effect=lambda _: socket.create_connection(("127.0.0.1", fixture.port), 4))):
                     with DesktopSession("browser", width=640, height=480,
                                         allowed_domains=("catalog.example",),
@@ -203,7 +203,7 @@ class TLSProxyTest(unittest.TestCase):
             finally:
                 fixture.close()
 
-    @unittest.skipUnless(os.environ.get("LCU_TEST_DESKTOP") == "1", "opt in with LCU_TEST_DESKTOP=1")
+    @unittest.skipUnless(os.environ.get("PCU_TEST_DESKTOP") == "1", "opt in with PCU_TEST_DESKTOP=1")
     def test_simultaneous_browser_profiles_have_distinct_cookies_and_persist(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -223,17 +223,17 @@ class TLSProxyTest(unittest.TestCase):
                                        start_url=f"https://catalog.example/catalog?{query}")
 
             try:
-                with (patch("local_computer_use._network._resolve", return_value=("1.1.1.1",)),
-                      patch("local_computer_use._network._open_upstream",
+                with (patch("parallel_computer_use._network._resolve", return_value=("1.1.1.1",)),
+                      patch("parallel_computer_use._network._open_upstream",
                             side_effect=lambda _: socket.create_connection(("127.0.0.1", fixture.port), 4))):
                     with launch("alpha", "first=alpha") as alpha, launch("beta", "first=beta") as beta:
                         with self.assertRaisesRegex(DesktopError, "already in use"):
                             launch("alpha", "busy")
                         for label in ("alpha", "beta"):
                             request = fixture.wait_request(f"/catalog?check={label}".encode("ascii"))
-                            self.assertIn(f"\r\ncookie: lcu_{label}=1\r\n".encode("ascii"), request)
+                            self.assertIn(f"\r\ncookie: pcu_{label}=1\r\n".encode("ascii"), request)
                     with launch("alpha", "persist"):
                         request = fixture.wait_request(b"/catalog?persist")
-                        self.assertIn(b"\r\ncookie: lcu_alpha=1\r\n", request)
+                        self.assertIn(b"\r\ncookie: pcu_alpha=1\r\n", request)
             finally:
                 fixture.close()

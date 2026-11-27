@@ -14,10 +14,10 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from local_computer_use.desktop import (
+from parallel_computer_use.desktop import (
     DesktopError, DesktopSession, _auth_record, _environment, _X11, validate_native_argv,
 )
-from local_computer_use._profiles import BrowserProfile, ProfileError
+from parallel_computer_use._profiles import BrowserProfile, ProfileError
 
 
 class NativeTemplatePolicyTest(unittest.TestCase):
@@ -47,6 +47,25 @@ class CaptureRegionTest(unittest.TestCase):
 
 
 class BrowserProfilePolicyTest(unittest.TestCase):
+    def test_legacy_profile_uses_its_existing_lock_and_browser_engine(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "data").mkdir(mode=0o700)
+            lock = root / ".lcu-profile"
+            marker = b"local-computer-use browser profile v1\nchromium\n"
+            lock.write_bytes(marker)
+            lock.chmod(0o600)
+            profile = BrowserProfile(root)
+            try:
+                self.assertEqual(profile.engine, "chromium")
+                profile.set_engine("chromium")
+                with self.assertRaisesRegex(ProfileError, "already in use"):
+                    BrowserProfile(root)
+                self.assertEqual(lock.read_bytes(), marker)
+                self.assertFalse((root / ".pcu-profile").exists())
+            finally:
+                profile.close()
+
     def test_profile_requires_exclusive_app_owned_data_and_a_consistent_engine(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "named"
@@ -71,7 +90,7 @@ class BrowserProfilePolicyTest(unittest.TestCase):
                 BrowserProfile(host_profile)
 
 
-@unittest.skipUnless(os.environ.get("LCU_TEST_DESKTOP") == "1", "opt in with LCU_TEST_DESKTOP=1")
+@unittest.skipUnless(os.environ.get("PCU_TEST_DESKTOP") == "1", "opt in with PCU_TEST_DESKTOP=1")
 class DesktopBoundaryTest(unittest.TestCase):
     def wait_until(self, condition, timeout=5):
         until = time.monotonic() + timeout
@@ -183,7 +202,7 @@ class DesktopBoundaryTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 guest.open_artifact("../escaped.txt", b"fixture")
             env = _environment(Path("/home/worker"), Path("/work"))
-            env.update(DISPLAY=guest.display, XAUTHORITY="/run/lcu.auth")
+            env.update(DISPLAY=guest.display, XAUTHORITY="/run/pcu.auth")
             source = """
 import json, os, pathlib, socket, sys
 port, host_file = sys.argv[1:]
@@ -275,7 +294,7 @@ Path("/work/output.txt").write_text("workspace is still writable")
             [sys.executable, "-c", """
 import json
 import time
-from local_computer_use.desktop import DesktopSession
+from parallel_computer_use.desktop import DesktopSession
 desktop = DesktopSession(width=640, height=480)
 print(json.dumps({"display": desktop.display, "authority": str(desktop.authority),
                   "guards": [desktop._display_process[0].pid, desktop._app_process[0].pid,

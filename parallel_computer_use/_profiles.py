@@ -1,4 +1,4 @@
-"""Exclusive custody of browser data created by Local Computer Use."""
+"""Exclusive custody of browser data created by Parallel Computer Use."""
 
 import fcntl
 import os
@@ -6,8 +6,10 @@ import stat
 from pathlib import Path
 
 
-_LOCK = ".lcu-profile"
-_MARKER = b"local-computer-use browser profile v1\n"
+_LOCK = ".pcu-profile"
+_MARKER = b"parallel-computer-use browser profile v1\n"
+_PREVIOUS_LOCK = ".lcu-profile"
+_PREVIOUS_MARKER = b"local-computer-use browser profile v1\n"
 
 
 class ProfileError(RuntimeError):
@@ -33,10 +35,13 @@ class BrowserProfile:
         try:
             if not _private_directory(root):
                 raise ProfileError("Browser profile directory must be user-owned with mode 0700")
-            if set(os.listdir(root)) - {_LOCK, "data"}:
+            contents = set(os.listdir(root))
+            lock_name = _PREVIOUS_LOCK if _PREVIOUS_LOCK in contents else _LOCK
+            self._marker = _PREVIOUS_MARKER if lock_name == _PREVIOUS_LOCK else _MARKER
+            if contents - {lock_name, "data"}:
                 raise ProfileError("Browser profile directory contains unrelated files")
             self.lock = os.open(
-                _LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=root,
+                lock_name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=root,
             )
             info = os.fstat(self.lock)
             if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
@@ -48,12 +53,12 @@ class BrowserProfile:
                 raise ProfileError("Browser profile is already in use") from error
             marker = os.pread(self.lock, 128, 0)
             if not marker and "data" not in os.listdir(root):
-                os.pwrite(self.lock, _MARKER, 0)
+                os.pwrite(self.lock, self._marker, 0)
                 os.fsync(self.lock)
-            elif marker not in {_MARKER, _MARKER + b"chromium\n", _MARKER + b"firefox\n"}:
-                raise ProfileError("Browser profile is missing the Local Computer Use marker")
+            elif marker not in {self._marker, self._marker + b"chromium\n", self._marker + b"firefox\n"}:
+                raise ProfileError("Browser profile is missing the Parallel Computer Use marker")
             else:
-                self.engine = marker[len(_MARKER):].strip().decode("ascii") or None
+                self.engine = marker[len(self._marker):].strip().decode("ascii") or None
             try:
                 os.mkdir("data", mode=0o700, dir_fd=root)
             except FileExistsError:
@@ -76,10 +81,10 @@ class BrowserProfile:
     def set_engine(self, engine):
         expected = f"{engine}\n".encode("ascii")
         current = os.pread(self.lock, 128, 0)
-        if current == _MARKER:
-            os.pwrite(self.lock, expected, len(_MARKER))
+        if current == self._marker:
+            os.pwrite(self.lock, expected, len(self._marker))
             os.fsync(self.lock)
-        elif current != _MARKER + expected:
+        elif current != self._marker + expected:
             raise ProfileError("Browser profile belongs to a different browser engine")
         self.engine = engine
 

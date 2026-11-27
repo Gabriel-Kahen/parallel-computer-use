@@ -11,12 +11,13 @@ import time
 import unittest
 from dataclasses import asdict
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
-from local_computer_use.__main__ import prune_history, read_config
-from local_computer_use.model_process import ManagedModel
-from local_computer_use.orchestrator import Job, Run
-from local_computer_use.store import Store
+from parallel_computer_use.__main__ import app_environment, prune_history, read_config, state_directory
+from parallel_computer_use.model_process import ManagedModel
+from parallel_computer_use.orchestrator import Job, Run
+from parallel_computer_use.store import Store
 
 
 PROBE = """#!/usr/bin/env python3
@@ -45,12 +46,29 @@ http.server.HTTPServer(("127.0.0.1", int(flag("--port"))), Handler).serve_foreve
 
 
 class LauncherTest(unittest.TestCase):
+    def test_new_state_directory_and_legacy_fallback(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"XDG_STATE_HOME": directory}):
+            current = Path(directory) / "parallel-computer-use"
+            previous = Path(directory) / "local-computer-use"
+            self.assertEqual(state_directory(), current)
+            previous.mkdir()
+            self.assertEqual(state_directory(), previous)
+            current.mkdir()
+            self.assertEqual(state_directory(), current)
+
+    def test_new_environment_key_overrides_legacy_key(self):
+        with patch.dict(os.environ, {"LCU_LLAMA_MODEL": "old"}, clear=True):
+            self.assertEqual(app_environment("LLAMA_MODEL"), "old")
+            self.assertEqual(app_environment("LLAMA_URL", "default"), "default")
+            os.environ["PCU_LLAMA_MODEL"] = "new"
+            self.assertEqual(app_environment("LLAMA_MODEL"), "new")
+
     def test_guard_removes_scratch_when_child_ignores_termination(self):
         with tempfile.TemporaryDirectory() as directory:
             scratch = Path(directory) / "scratch"
             scratch.mkdir()
             marker = scratch / "ready"
-            spawn = Path(__file__).resolve().parents[1] / "local_computer_use" / "_spawn.py"
+            spawn = Path(__file__).resolve().parents[1] / "parallel_computer_use" / "_spawn.py"
             read, write = os.pipe()
             child = ("import signal,sys,time; from pathlib import Path;"
                      "signal.signal(signal.SIGTERM, signal.SIG_IGN);"

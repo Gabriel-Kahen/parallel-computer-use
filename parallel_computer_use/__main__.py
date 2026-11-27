@@ -41,7 +41,7 @@ class DesktopNotifications:
         self.stop = threading.Event()
         self.thread = None
         if self.executable:
-            self.thread = threading.Thread(target=self._run, name="lcu-notifications", daemon=True)
+            self.thread = threading.Thread(target=self._run, name="pcu-notifications", daemon=True)
             self.thread.start()
 
     def offer(self, title, text):
@@ -58,7 +58,7 @@ class DesktopNotifications:
             except queue.Empty:
                 continue
             try:
-                subprocess.run([self.executable, "--app-name=Local Computer Use", "--", title, text],
+                subprocess.run([self.executable, "--app-name=Parallel Computer Use", "--", title, text],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2, check=False)
             except (OSError, subprocess.TimeoutExpired):
                 pass
@@ -71,7 +71,13 @@ class DesktopNotifications:
 
 def state_directory():
     base = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
-    return base / "local-computer-use"
+    current = base / "parallel-computer-use"
+    previous = base / "local-computer-use"
+    return previous if previous.exists() and not current.exists() else current
+
+
+def app_environment(name, default=None):
+    return os.environ.get(f"PCU_{name}", os.environ.get(f"LCU_{name}", default))
 
 
 def secure_directory(directory):
@@ -100,9 +106,9 @@ def doctor(_args):
         "desktop": os.environ.get("XDG_CURRENT_DESKTOP", ""),
         "session": os.environ.get("XDG_SESSION_TYPE", ""),
         "executables": {name: bool(shutil.which(name)) for name in bins},
-        "llama_url_configured": bool(os.environ.get("LCU_LLAMA_URL")),
-        "gemini_configured": bool(os.environ.get("LCU_GEMINI_API_KEY") and os.environ.get("LCU_GEMINI_MODEL")),
-        "codex_configured": bool(os.environ.get("LCU_CODEX_TOKEN") and os.environ.get("LCU_CODEX_MODEL")),
+        "llama_url_configured": bool(app_environment("LLAMA_URL")),
+        "gemini_configured": bool(app_environment("GEMINI_API_KEY") and app_environment("GEMINI_MODEL")),
+        "codex_configured": bool(app_environment("CODEX_TOKEN") and app_environment("CODEX_MODEL")),
     }
     data["executables"]["chrome"] = os.access("/opt/google/chrome/chrome", os.X_OK)
     data["available_disk_mib"] = shutil.disk_usage(Path.home()).free // (1024 * 1024)
@@ -114,7 +120,7 @@ def configured_providers(args, managed=None, config=None):
     if args.demo:
         return {"local": DemoProvider()}
     identifier, url = (managed.alias, managed.base_url) if managed else (args.model, args.llama_url)
-    api_key = managed.api_key if managed else os.environ.get("LCU_LLAMA_API_KEY")
+    api_key = managed.api_key if managed else app_environment("LLAMA_API_KEY")
     providers = {"local": LlamaProvider(identifier, url, timeout=args.model_timeout, api_key=api_key,
                                        max_output_tokens=args.model_max_tokens,
                                        reasoning_budget=args.model_reasoning_budget)}
@@ -124,12 +130,12 @@ def configured_providers(args, managed=None, config=None):
                                  reasoning_budget=entry.get("reasoning_budget"))
         provider.label = entry.get("label", name)
         providers["local-" + name] = provider
-    if key := os.environ.get("LCU_GEMINI_API_KEY"):
-        if model := os.environ.get("LCU_GEMINI_MODEL"):
+    if key := app_environment("GEMINI_API_KEY"):
+        if model := app_environment("GEMINI_MODEL"):
             providers["gemini"] = GeminiProvider(model, key, timeout=args.model_timeout)
     if args.codex_model:
-        if os.environ.get("LCU_CODEX_TOKEN"):
-            supplier = lambda: os.environ.get("LCU_CODEX_TOKEN", "")
+        if app_environment("CODEX_TOKEN"):
+            supplier = lambda: app_environment("CODEX_TOKEN", "")
         else:
             auth = CodexAuth(args.state_dir.absolute() / "codex-auth")
             signed_in = [account.client_id for account in auth.accounts() if account.signed_in]
@@ -349,7 +355,7 @@ def bounded(low, high):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="local-computer-use")
+    parser = argparse.ArgumentParser(prog="parallel-computer-use")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("doctor", help="Report which local components are configured.").set_defaults(run=doctor)
     history = commands.add_parser("prune-history", help="Remove old finished runs while the service is stopped.")
@@ -388,19 +394,19 @@ def main(argv=None):
                         help="Optional llama-server reasoning budget for the primary local model.")
     server.add_argument("--width", type=bounded(640, 1280), default=960)
     server.add_argument("--height", type=bounded(480, 960), default=640)
-    server.add_argument("--llama-url", default=os.environ.get("LCU_LLAMA_URL", "http://127.0.0.1:8080/v1"))
-    server.add_argument("--model", default=os.environ.get("LCU_LLAMA_MODEL", "local"))
+    server.add_argument("--llama-url", default=app_environment("LLAMA_URL", "http://127.0.0.1:8080/v1"))
+    server.add_argument("--model", default=app_environment("LLAMA_MODEL", "local"))
     server.add_argument("--model-file", type=Path, help="Manage one local GGUF model instead of connecting to a server.")
     server.add_argument("--mmproj", type=Path, help="Matching vision projector for a managed model.")
-    server.add_argument("--llama-server", default=os.environ.get("LCU_LLAMA_SERVER", "llama-server"))
+    server.add_argument("--llama-server", default=app_environment("LLAMA_SERVER", "llama-server"))
     server.add_argument("--context-per-slot", type=bounded(2048, 32768), default=4096)
     server.add_argument("--gpu-layers", type=bounded(0, 99), default=99)
     server.add_argument("--gpu-device", type=bounded(0, 31), help="Select a CUDA device for the managed model.")
     server.add_argument("--model-threads", type=bounded(1, 12), default=2)
     server.add_argument("--image-min-tokens", type=bounded(16, 4096),
                         help="Optional minimum visual tokens per frame for the managed model.")
-    server.add_argument("--codex-model", default=os.environ.get("LCU_CODEX_MODEL"))
-    server.add_argument("--codex-account", default=os.environ.get("LCU_CODEX_ACCOUNT"))
+    server.add_argument("--codex-model", default=app_environment("CODEX_MODEL"))
+    server.add_argument("--codex-account", default=app_environment("CODEX_ACCOUNT"))
     server.add_argument("--desktop-mode", choices=("sandbox", "host-private"), default="sandbox")
     server.add_argument("--allow-domain", action="append", default=[],
                         help="Permit an exact hostname in opt-in browser jobs. May be repeated.")
@@ -417,7 +423,7 @@ def main(argv=None):
     try:
         return args.run(args)
     except (OSError, ValueError, ProviderError, CodexAuthError) as error:
-        print(f"Local Computer Use: {error}", file=sys.stderr)
+        print(f"Parallel Computer Use: {error}", file=sys.stderr)
         return 1
 
 

@@ -88,7 +88,7 @@ class LocalServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LocalComputerUse"
+    server_version = "ParallelComputerUse"
     sys_version = ""
 
     def setup(self):
@@ -198,8 +198,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if frame := FRAME.fullmatch(path):
             job_id = frame[1]
-            payload, sequence, private = self.server.app.frame(job_id, self.headers.get("X-LCU-Privacy"))
-            flags = {"X-LCU-Private": "1"} if private else {}
+            payload, sequence, private = self.server.app.frame(job_id, self.headers.get("X-PCU-Privacy"))
+            flags = {"X-PCU-Private": "1"} if private else {}
             if payload is None:
                 self._bytes(204, headers=flags)
                 return

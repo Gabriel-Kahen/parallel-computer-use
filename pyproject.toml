@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "local-computer-use"
+name = "parallel-computer-use"
 version = "0.1.0"
 description = "Coordinate local AI workers in private Linux desktop sessions."
 readme = "README.md"
@@ -14,10 +14,10 @@ dependencies = []
 codex-auth = ["PyJWT[crypto]>=2.10.1,<3"]
 
 [project.scripts]
-local-computer-use = "local_computer_use.__main__:main"
+parallel-computer-use = "parallel_computer_use.__main__:main"
 
 [tool.setuptools]
-packages = ["local_computer_use"]
+packages = ["parallel_computer_use"]
 
 [tool.setuptools.package-data]
-local_computer_use = ["static/*.html", "static/*.css", "static/*.js", "fixtures/*"]
+parallel_computer_use = ["static/*.html", "static/*.css", "static/*.js", "fixtures/*"]

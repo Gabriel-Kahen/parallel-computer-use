@@ -39,7 +39,7 @@ const initialCredential = location.hash.slice(1);
 if (initialCredential) history.replaceState(null, "", location.pathname + location.search);
 let browserToken = "";
 try {
-  browserToken = sessionStorage.getItem("lcu_session") || "";
+  browserToken = sessionStorage.getItem("pcu_session") || "";
 } catch {
   // A launch credential still works when session storage is unavailable.
 }
@@ -205,7 +205,7 @@ async function connect() {
       if (typeof auth.token !== "string" || !auth.token) throw new Error("The launch link returned no dashboard session.");
       browserToken = auth.token;
       try {
-        sessionStorage.setItem("lcu_session", browserToken);
+        sessionStorage.setItem("pcu_session", browserToken);
       } catch {
         // The dashboard can keep the token in memory until the page closes.
       }
@@ -831,7 +831,7 @@ async function requestFrame(id, now, interval, concurrency, forViewer = false) {
   frame.touched = now;
   frameRequests++;
   const headers = frame.etag ? { "If-None-Match": frame.etag } : {};
-  if (privacyToken) headers["X-LCU-Privacy"] = privacyToken;
+  if (privacyToken) headers["X-PCU-Privacy"] = privacyToken;
   const stillCurrent = () => ticket
     ? control === ticket && viewerId === id && ticket.privacyToken === privacyToken && ticket.privateFrame === frame
     : previews.get(id) === frame && !jobs.get(id)?.private_view;
@@ -843,7 +843,7 @@ async function requestFrame(id, now, interval, concurrency, forViewer = false) {
       signal: AbortSignal.timeout(3500)
     });
     if (!stillCurrent()) return;
-    if (!ticket && response.headers.get("X-LCU-Private") === "1" && originalStateTag === stateTag) {
+    if (!ticket && response.headers.get("X-PCU-Private") === "1" && originalStateTag === stateTag) {
       const current = jobs.get(id);
       if (current) {
         current.private_view = true;

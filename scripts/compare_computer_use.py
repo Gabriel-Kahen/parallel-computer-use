@@ -18,8 +18,8 @@ from itertools import product
 from pathlib import Path
 from urllib.parse import quote
 
-from local_computer_use.model_process import ManagedModel
-from local_computer_use.providers import LlamaProvider, ProviderError
+from parallel_computer_use.model_process import ManagedModel
+from parallel_computer_use.providers import LlamaProvider, ProviderError
 
 WIDTH, HEIGHT = 800, 600
 MODES = ("pixels", "ax", "viewport", "paired", "routed")
@@ -165,7 +165,7 @@ class Browser:
                 raise RuntimeError("Offline fixture did not load")
             time.sleep(.01)
         frame = self.send("Page.getFrameTree")["frameTree"]["frame"]["id"]
-        self.world = self.send("Page.createIsolatedWorld", frameId=frame, worldName="lcu-benchmark")["executionContextId"]
+        self.world = self.send("Page.createIsolatedWorld", frameId=frame, worldName="pcu-benchmark")["executionContextId"]
 
     def eval(self, expression, *, private=True):
         options = {"contextId": self.world} if private else {}
@@ -197,7 +197,7 @@ def private_browser(executable):
     os.close(incoming)
     os.close(outgoing)
     try:
-        with tempfile.TemporaryDirectory(prefix="lcu-comparison-") as profile, tempfile.TemporaryFile() as log:
+        with tempfile.TemporaryDirectory(prefix="pcu-comparison-") as profile, tempfile.TemporaryFile() as log:
             process = subprocess.Popen(["/bin/bash", "-c", 'exec 3<&"$1" 4>&"$2"; shift 2; exec "$@"', "chrome",
                                         str(child_in), str(child_out), executable, "--headless", "--disable-gpu",
                                         "--disable-background-networking", "--no-first-run", "--no-proxy-server",

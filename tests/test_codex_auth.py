@@ -12,8 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from local_computer_use import codex_auth
-from local_computer_use.codex_auth import CodexAuth, CodexAuthError
+from parallel_computer_use import codex_auth
+from parallel_computer_use.codex_auth import CodexAuth, CodexAuthError
 
 try:
     import jwt
@@ -158,7 +158,7 @@ class CodexAuthTests(unittest.TestCase):
         authorization, = self.authorizations
         exchange, = self.exchanges
         self.assertEqual(authorization["client_id"], "dynamic_agent_client")
-        self.assertEqual(authorization["agent_name_hint"], "Local Computer Use")
+        self.assertEqual(authorization["agent_name_hint"], "Parallel Computer Use")
         self.assertTrue(authorization["ext_agent_host_id"].startswith("urn:uuid:"))
         self.assertEqual(authorization["scope"], SCOPES)
         self.assertEqual(authorization["response_type"], "code")

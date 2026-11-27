@@ -33,7 +33,7 @@ _REVOCATION = "/api/accounts/oauth/revoke"
 _CALLBACK = "/auth/callback"
 _RESOURCE = "https://api.openai.com/v1"
 _DYNAMIC_CLIENT = "dynamic_agent_client"
-_APP_NAME = "Local Computer Use"
+_APP_NAME = "Parallel Computer Use"
 _REQUEST_SCOPES = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
 _PLAN_SCOPES = {"offline_access", "resource.invoke", "chatgpt.tokens.use.direct"}
 _TOKEN_LIMIT = 16 * 1024
@@ -245,7 +245,7 @@ def _browser_callback(open_browser, authorize, state, timeout):
                 self._reply(400, "ChatGPT authorization did not finish. Return to the app.")
             else:
                 outcome = {key: values[0] for key, values in fields.items()}
-                self._reply(200, "Return to Local Computer Use to finish verifying your sign-in.")
+                self._reply(200, "Return to Parallel Computer Use to finish verifying your sign-in.")
             received.put_nowait(outcome)
 
         def _reply(self, status, message):

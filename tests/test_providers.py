@@ -7,7 +7,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
-from local_computer_use.providers import (
+from parallel_computer_use.providers import (
     MAX_DIRECTIVE_BYTES,
     MAX_IMAGE_BYTES,
     MAX_PROMPT_BYTES,
@@ -115,7 +115,7 @@ class ProviderTests(unittest.TestCase):
             self.cloud_hosts.append((host, port))
             return http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
 
-        return patch("local_computer_use.providers.http.client.HTTPSConnection", side_effect=connect)
+        return patch("parallel_computer_use.providers.http.client.HTTPSConnection", side_effect=connect)
 
     def test_llama_sends_bounded_typed_png_and_schema(self):
         with patch.dict(os.environ, {"http_proxy": "http://127.0.0.1:1"}, clear=False):

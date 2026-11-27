@@ -8,8 +8,8 @@ import time
 import unittest
 from pathlib import Path
 
-from local_computer_use.desktop import DesktopSession
-from local_computer_use.orchestrator import Orchestrator, TERMINAL
+from parallel_computer_use.desktop import DesktopSession
+from parallel_computer_use.orchestrator import Orchestrator, TERMINAL
 
 
 class CatalogFixture:
@@ -45,7 +45,7 @@ class CatalogFixture:
             raise AssertionError("Coordinator dependency results did not reach the editor")
 
 
-@unittest.skipUnless(os.environ.get("LCU_TEST_DESKTOP") == "1", "opt in with LCU_TEST_DESKTOP=1")
+@unittest.skipUnless(os.environ.get("PCU_TEST_DESKTOP") == "1", "opt in with PCU_TEST_DESKTOP=1")
 class WorkstationTest(unittest.TestCase):
     def wait_until(self, check, timeout=25):
         deadline = time.monotonic() + timeout

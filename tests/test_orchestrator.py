@@ -6,9 +6,9 @@ from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import patch
 
-from local_computer_use.orchestrator import Job, Orchestrator, RequestError, Run, TERMINAL
-from local_computer_use.providers import DecisionUsage
-from local_computer_use.store import Store
+from parallel_computer_use.orchestrator import Job, Orchestrator, RequestError, Run, TERMINAL
+from parallel_computer_use.providers import DecisionUsage
+from parallel_computer_use.store import Store
 
 
 class FakeDesktop:
@@ -192,7 +192,7 @@ class OrchestratorTest(unittest.TestCase):
     def test_turn_limit_keeps_a_desktop_during_manual_takeover(self):
         provider = GateProvider()
         app = self.build({"local": provider})
-        with patch("local_computer_use.orchestrator.MAX_STEPS", 1):
+        with patch("parallel_computer_use.orchestrator.MAX_STEPS", 1):
             run = app.start_run({"prompt": "fixture"})
             job = app.runs[run].jobs[0]
             self.assertTrue(provider.entered.wait(3))
@@ -224,7 +224,7 @@ class OrchestratorTest(unittest.TestCase):
         run = app.start_run({"prompt": "fixture"})
         self.assertTrue(provider.entered.wait(3))
         job = app.runs[run].jobs[0]
-        with patch("local_computer_use.orchestrator.MANUAL_TIMEOUT", 0.02):
+        with patch("parallel_computer_use.orchestrator.MANUAL_TIMEOUT", 0.02):
             takeover = app.command(job.id, {"command": "takeover"})
         self.wait_for(lambda: job.owner is None and job.status == "paused")
         self.assertGreater(job.lease, takeover["lease"])
