@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Local Computer Use</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a href="#workspace" class="skip-link">Skip to workspace</a>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Local Computer Use home">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span>Local Computer Use</span>
+    </a>
+    <div class="topbar-controls">
+      <span class="connection" id="connection" role="status" data-status="pending">Connecting</span>
+      <button class="button button-stop" type="button" id="stop" disabled><span class="stop-mark" aria-hidden="true"></span> Stop all</button>
+    </div>
+  </header>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Runs">
+      <button type="button" class="new-run" id="new-run"><span aria-hidden="true">+</span> New run</button>
+      <nav aria-label="Workspaces">
+        <button type="button" class="nav-all" id="all-workers" aria-current="page">
+          <span class="grid-mark" aria-hidden="true"></span> All workers <span class="nav-count" id="side-count">0</span>
+        </button>
+        <h2 class="sidebar-heading">Run history</h2>
+        <ul class="run-list" id="run-list"></ul>
+        <p class="sidebar-empty" id="history-empty">No runs yet</p>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="local-mark" aria-hidden="true"></span>
+        <div><strong>Local service</strong><br><span id="instance-label">On this machine</span></div>
+      </div>
+    </aside>
+
+    <main class="workspace" id="workspace" tabindex="-1">
+      <header class="workspace-heading">
+        <div>
+          <p class="overline" id="workspace-label">WORKSPACE</p>
+          <h1 id="workspace-title">Worker overview</h1>
+          <p class="heading-note" id="workspace-note">Launch a run and monitor its desktop sessions here.</p>
+        </div>
+        <div class="metrics" aria-label="Worker status counts">
+          <span><strong id="metric-active">0</strong> Active</span>
+          <span><strong id="metric-queued">0</strong> Queued</span>
+          <span><strong id="metric-finished">0</strong> Finished</span>
+        </div>
+      </header>
+
+      <div class="feedback" id="feedback" role="status" hidden>
+        <span id="feedback-text"></span>
+        <button type="button" id="dismiss-feedback" aria-label="Dismiss notice">×</button>
+      </div>
+
+      <section class="composer" aria-labelledby="composer-title">
+        <form id="run-form">
+          <div class="composer-heading">
+            <label id="composer-title" for="prompt">New run</label>
+            <span id="provider-caption" class="provider-pill">Local</span>
+          </div>
+          <textarea id="prompt" name="prompt" placeholder="What should the workers do?" rows="2" maxlength="4800" required></textarea>
+          <div class="composer-controls">
+            <label class="compact-field" for="worker-count">Workers
+              <input id="worker-count" name="count" type="number" min="1" max="32" value="2" required>
+            </label>
+            <button type="button" class="button button-quiet" id="toggle-options" aria-expanded="false" aria-controls="run-options">Run settings <span class="caret" aria-hidden="true"></span></button>
+            <button type="submit" class="button button-launch" id="launch" disabled>Launch run <span aria-hidden="true">↗</span></button>
+          </div>
+          <div class="run-options" id="run-options" hidden>
+            <div class="option-fields">
+              <label>Provider<select id="provider" name="provider"></select></label>
+              <label>Session template<select id="session-template" name="template"></select></label>
+            </div>
+            <p class="field-note" id="provider-detail"></p>
+            <p class="field-note" id="limit-detail"></p>
+            <label class="start-url-field" id="start-url-field" hidden>
+              Browser start URL <small>Optional</small>
+              <input type="url" id="start-url" aria-describedby="start-url-help" placeholder="Offline catalog" maxlength="1536" disabled>
+              <span class="field-note" id="start-url-help"></span>
+            </label>
+            <label class="run-field" id="browser-profile-wrap" hidden>
+              Browser profile <small>Optional</small>
+              <select id="browser-profile" aria-describedby="browser-profile-help" disabled></select>
+              <span class="field-note" id="browser-profile-help">Only one browser can use a named reusable profile at a time. Automatic uses a browser when you choose a named profile.</span>
+            </label>
+            <label class="run-field" for="input-files">
+              Input files <small>Optional</small>
+              <input type="file" id="input-files" aria-describedby="input-files-help input-files-summary" multiple>
+              <span class="field-note" id="input-files-help">Copy up to four files (256 KiB total) into private <code>/work/imports</code>. Cloud providers receive no automatic raw attachments.</span>
+              <span class="field-note" id="input-files-summary" aria-live="polite" hidden></span>
+            </label>
+            <details class="assignments" id="assignments-section">
+              <summary>Worker assignments <small>Optional</small></summary>
+              <p class="field-note">Each worker inherits the run settings unless you override them here.</p>
+              <div id="assignments-list"></div>
+            </details>
+            <label class="cloud-consent" id="cloud-consent-wrap" hidden>
+              <input type="checkbox" id="cloud-consent">
+              <span>Allow the selected cloud workers to send prompts and messages to their providers. Screenshots may also leave this device when a provider supports image input.</span>
+            </label>
+            <label class="cloud-consent" id="share-results-wrap" hidden>
+              <input type="checkbox" id="share-results">
+              <span>Share earlier worker results with selected cloud workers. These results may be sent to their providers.</span>
+            </label>
+          </div>
+        </form>
+      </section>
+
+      <section class="worker-monitor" aria-labelledby="grid-title">
+        <div class="section-heading monitor-heading">
+          <div><h2 id="grid-title">Desktop grid</h2><span class="section-count" id="grid-count">0</span></div>
+          <div class="grid-settings" aria-label="Grid layout">
+            <div class="segmented" role="group" aria-label="Layout mode">
+              <button type="button" id="layout-auto" aria-pressed="true">Auto</button>
+              <button type="button" id="layout-fixed" aria-pressed="false">Fixed</button>
+            </div>
+            <div class="grid-dimensions" id="grid-dimensions" hidden>
+              <label><span class="visually-hidden">Rows</span><input id="grid-rows" type="number" min="1" max="12" value="2" title="Rows"></label>
+              <span aria-hidden="true">×</span>
+              <label><span class="visually-hidden">Columns</span><input id="grid-columns" type="number" min="1" max="12" value="2" title="Columns"></label>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-viewport" id="grid-viewport">
+          <div class="workers-grid" id="workers-grid" aria-label="Worker sessions"></div>
+          <div class="empty-grid" id="grid-empty">
+            <div class="empty-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+            <h3>No desktop sessions</h3>
+            <p>Your workers and their live previews will appear here.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="run-detail" id="run-detail" aria-labelledby="detail-title">
+        <div class="section-heading detail-heading">
+          <div><h2 id="detail-title">Run details</h2></div>
+          <div class="detail-controls">
+            <button type="button" class="button button-quiet" id="cancel-run" hidden>Cancel run</button>
+            <div class="segmented" role="tablist" aria-label="Run details">
+              <button type="button" role="tab" id="activity-tab" aria-controls="activity-panel" aria-selected="true">Activity</button>
+              <button type="button" role="tab" id="results-tab" aria-controls="results-panel" aria-selected="false" tabindex="-1">Results</button>
+            </div>
+          </div>
+        </div>
+        <p class="run-summary" id="run-summary" hidden></p>
+        <p class="field-note run-imports" id="run-imports" hidden></p>
+        <div id="activity-panel" role="tabpanel" aria-labelledby="activity-tab">
+          <div class="event-list" id="events"></div>
+          <form class="message-form" id="message-form" hidden>
+            <label for="recipient">To <select id="recipient" required></select></label>
+            <label class="message-text"><span class="visually-hidden">Follow-up message</span><input type="text" id="follow-up" maxlength="1600" placeholder="Write a follow-up" required></label>
+            <button type="submit" class="button button-secondary" id="send">Send</button>
+          </form>
+        </div>
+        <div id="results-panel" role="tabpanel" aria-labelledby="results-tab" hidden>
+          <div class="results-list" id="results"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="viewer" class="viewer" aria-labelledby="viewer-title" aria-describedby="viewer-status">
+    <div class="viewer-header">
+      <div>
+        <p class="overline">SESSION VIEWER</p>
+        <h2 id="viewer-title">Worker</h2>
+        <p id="viewer-status"></p>
+      </div>
+      <button type="button" class="button viewer-close" id="viewer-close" aria-label="Close viewer">×</button>
+    </div>
+    <div class="viewer-content">
+      <div class="viewer-desktop" id="viewer-desktop" role="application" aria-label="Remote desktop" aria-describedby="viewer-help" tabindex="-1">
+        <img id="viewer-image" alt="Current desktop frame" draggable="false" hidden>
+        <p id="viewer-empty">Waiting for a desktop frame</p>
+      </div>
+      <div class="viewer-side">
+        <p class="viewer-task" id="viewer-task"></p>
+        <dl class="viewer-facts">
+          <div><dt>Provider</dt><dd id="viewer-provider"></dd></div>
+          <div id="viewer-profile-wrap" hidden><dt>Browser profile</dt><dd id="viewer-profile"></dd></div>
+          <div><dt>Input owner</dt><dd id="viewer-owner"></dd></div>
+          <div><dt>Last action</dt><dd id="viewer-action"></dd></div>
+        </dl>
+        <p role="status" class="viewer-feedback" id="viewer-feedback" hidden></p>
+      </div>
+    </div>
+    <div class="viewer-footer">
+      <span id="viewer-help"></span>
+      <div class="viewer-controls">
+        <button type="button" class="button button-quiet" id="viewer-message">Message worker</button>
+        <button type="button" class="button button-secondary" id="viewer-privacy" aria-pressed="false" hidden>Private view</button>
+        <button type="button" class="button button-secondary" id="viewer-pause">Pause</button>
+        <button type="button" class="button button-secondary" id="viewer-cancel">Cancel worker</button>
+        <button type="button" class="button button-launch" id="viewer-takeover">Take control</button>
+      </div>
+    </div>
+  </dialog>
+
+  <template id="worker-tile">
+    <article class="worker-tile">
+      <button type="button" class="tile-preview">
+        <img class="tile-image" alt="" draggable="false" hidden>
+        <span class="tile-placeholder"></span>
+        <span class="open-viewer" aria-hidden="true">↗</span>
+        <span class="tile-preview-age" hidden></span>
+      </button>
+      <p class="tile-text-only" hidden>Text worker</p>
+      <div class="tile-content">
+        <div class="tile-heading"><h3></h3><span class="worker-status"></span></div>
+        <p class="tile-task"></p>
+        <div class="tile-meta"><span class="tile-provider"></span><span class="tile-owner"></span></div>
+        <p class="tile-action"></p>
+        <p class="tile-result" hidden></p>
+      </div>
+      <div class="tile-controls">
+        <button type="button" class="button button-quiet tile-open">Open viewer</button>
+        <button type="button" class="button button-quiet tile-pause"></button>
+        <button type="button" class="button button-quiet tile-cancel">Cancel</button>
+      </div>
+    </article>
+  </template>
+</body>
+</html>

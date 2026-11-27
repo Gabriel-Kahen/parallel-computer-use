@@ -2,7 +2,67 @@
 
 Run a team of AI agents from one Linux app. Prompt the team, watch every worker's desktop in a live grid, and step in when a decision needs you. Agents can exchange findings and hand off an open application while you keep using your own desktop. Local models are the default, with optional cloud providers for jobs you explicitly assign to them.
 
-**Status** · Design and implementation plan. The initial target is x86-64 Linux with a Wayland host, specifically Hyprland and a 32 GB Tesla V100. The app, supported application list, and performance targets are still to be validated.
+**Status** · Workstation pilot for x86-64 Linux. Development and validation target Hyprland on Wayland and a 32 GB Tesla V100. Worker desktops run X11 applications in private displays. Provider accounts and application coverage vary by setup.
+
+## Run it locally
+
+The core app runs on Python 3.11+ with no third-party Python runtime packages. Install your distribution's Xvfb, X11 and XTEST libraries, Bubblewrap, i3, D-Bus tools, xterm, nano, and xclip. Use Firefox, Chromium, or Google Chrome for browser workers. Enable unprivileged user namespaces for the sandbox. Verify the installed components, then start a scripted run without a model:
+
+```sh
+python3 -m local_computer_use doctor
+python3 -m local_computer_use serve --demo
+```
+
+Open the one-use loopback link from the terminal. The dashboard lets you enter a prompt, switch between automatic and fixed grid layouts, open a live session, and take manual control. Choose Observe only in a worker assignment to let its model inspect and report without sending input. Close the dashboard to leave the service running. Use `python3 -m local_computer_use open` to reconnect, `status` to see worker counts, and `stop-all` to cancel work. Stop the service with Ctrl+C in its launch terminal. The same commands are available under `local-computer-use` after `pip install .`.
+
+### Local models
+
+Use a running loopback `llama-server`, or let the app manage one. Configure a compatible vision model and projector. The verified low-resource configuration used the official Qwen3-VL-2B-Instruct Q4_K_M and Q8_0 projector. On Volta, use a tested CUDA 12.x build of llama.cpp targeting compute capability 7.0. [Qwen GGUF files](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/tree/52d6c8ffea26cc873ac5ad116f8631268d7eb503) · [llama.cpp build guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
+
+```sh
+python3 -m local_computer_use serve \
+  --model-file /path/to/Qwen3VL-2B-Instruct-Q4_K_M.gguf \
+  --mmproj /path/to/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf \
+  --gpu-device 0 --sessions 3 --inference-slots 2
+```
+
+Use `--llama-server /path/to/llama-server` if the executable is outside your path, `--gpu-layers 0` for CPU inference, or `--llama-url http://127.0.0.1:8080/v1 --model MODEL_ID` to use an existing server. The app generates a private loopback API key for managed models. For an existing server that requires a key, provide `LCU_LLAMA_API_KEY` in the service environment.
+
+Start with two inference slots on the tested V100. Choose a lower limit when using the GPU for foreground workloads. Separate desktop and inference caps let agents wait on an app while another agent uses the model.
+
+For aggregate CPU, RAM, and process controls, use a systemd user scope with the model running separately. The following limits the app and worker desktops together.
+
+```sh
+systemd-run --user --scope -p CPUWeight=20 -p MemoryHigh=1G -p MemoryMax=2G -p TasksMax=512 \
+  python3 -m local_computer_use serve --llama-url http://127.0.0.1:8080/v1 --model MODEL_ID
+```
+
+### Browser profiles and more applications
+
+Browser jobs open an offline catalog by default. For website access, explicitly configure each permitted hostname with `--allow-domain hostname`, then select a browser start URL in the composer. This path supports HTTPS on port 443 and an exact hostname allowlist. Sites that need additional hosts require explicit configuration of those hosts. Access remains subject to the website's terms. The pilot's network qualification uses a synthetic TLS fixture.
+
+Register reusable private browser profiles with `--browser-profile NAME`. Select a profile in the composer when you want the browser to remember its session. Jobs using the same profile take turns. Profiles use the app's private state directory and do not reuse your personal browser profile. For sensitive manual entry, take control and turn on Private view before typing. Turn it off after dismissing the sensitive screen.
+
+Use `--native-executable /usr/bin/gnome-calculator --native-label Calculator` to add an installed X11-capable app. Use `--config settings.json` to register several apps or local model endpoints. The model can select a registered template in Automatic mode. The application command and arguments always come from the operator's configuration.
+
+```json
+{
+  "applications": {
+    "calculator": {"label": "Calculator", "argv": ["/usr/bin/gnome-calculator"]}
+  },
+  "local_models": {
+    "secondary": {"label": "Secondary local model", "model": "secondary", "url": "http://127.0.0.1:8090/v1"}
+  }
+}
+```
+
+The composer can copy up to four files totaling 256 KiB into each desktop's read-only imports directory. The Results panel lists saved workspace files for download. Set `--notifications` for passive desktop notifications through `notify-send`. With the service stopped, `python3 -m local_computer_use prune-history --older-than-days 30 --dry-run` counts eligible runs. Omit `--dry-run` to remove their history, inputs, and workspace files. Browser profiles are kept separately.
+
+### Optional cloud accounts
+
+Codex runs as an optional text worker through OpenAI's documented ChatGPT-plan Responses flow. Install the `codex-auth` extra, connect an eligible account using `codex-login`, then start the app with `--codex-model MODEL_ID`. Use `codex-accounts` to find the account ID if several accounts are connected, and `--codex-account ID` when starting the service. `codex-logout --account ID` clears that connection. Codex's account and inference paths have deterministic fixtures. A live subscription sign-in has yet to be qualified. [OpenAI sign-in guide](https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt) · [Plan inference docs](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+
+For Gemini, set `LCU_GEMINI_MODEL` and provide `LCU_GEMINI_API_KEY` in the service environment. Billing and quotas belong to your Google Cloud project. The account setting enables a provider option in the composer. Each run still needs explicit consent for cloud workers, and sharing dependency results with other providers takes a separate opt-in. [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)
 
 ## Contents
 
@@ -21,12 +81,12 @@ Run a team of AI agents from one Linux app. Prompt the team, watch every worker'
 ## What the app should do
 
 1. Accept a prompt or a list of explicitly assigned tasks from the app. Let the user specify a worker count, an application or session template, permitted inputs and destinations, and the desired output. Show the proposed assignments, providers, and concurrency.
-2. Run independent workers at the same time. Each gets its own model context, app state, display, keyboard, mouse, clipboard, and work directory. A run can have more jobs than the machine can execute at once. Excess work queues.
+2. Run independent workers at the same time. Each desktop worker gets its own model context, app state, display, keyboard focus, mouse pointer, clipboard, and work directory. A run can have more jobs than the machine can execute at once. Excess work queues.
 3. Let workers give one another messages and artifacts. A coordinator can combine findings, report partial results, or assign a follow-up. A worker can hand off a live application session to another worker or the user.
 4. Show all active workers together in a live grid. Give each worker a preview, status, last meaningful action, and result. Provide pause, resume, take over, return control, cancel, and stop-all controls. Notify the user when a run finishes or requires attention.
 5. Run inference locally by default and maintain the app's history on the machine. Allow eligible ChatGPT plan usage for Codex and support a Gemini provider through its official developer API. Give the user control over provider selection, data sent to cloud providers, network access, imports and exports, persistent app profiles, and retention.
 
-**Example run.** Two workers use separate browser sessions to search different parts of a test catalog. They send structured results to a third worker, which opens a native spreadsheet app and produces a shortlist with source links. The user can inspect the active sessions, temporarily take over one browser to resolve an ambiguity, and keep working in Hyprland. The example uses a local fixture with known answers. For an actual marketplace integration, evaluate the provider's API and access requirements. [eBay Browse API](https://developer.ebay.com/develop/api/buy/browse_api/item/search) · [eBay User Agreement](https://www.ebay.com/help/default/default/user-agreement?id=4259)
+**Example run.** Two workers use separate browser sessions to search different parts of a test catalog. They send structured results to a third worker, which uses a native editor to save a shortlist. The user can inspect the active sessions, temporarily take over one browser to resolve an ambiguity, and keep working in Hyprland. The example uses a local fixture with known answers. For an actual marketplace integration, evaluate the provider's API and access requirements. [eBay Browse API](https://developer.ebay.com/develop/api/buy/browse_api/item/search) · [eBay User Agreement](https://www.ebay.com/help/default/default/user-agreement?id=4259)
 
 ## Architecture and dependencies
 
@@ -49,13 +109,13 @@ One per-user service owns the job queue, session lifecycle, input arbitration, m
 | Layer | Initial choice | What we build |
 | --- | --- | --- |
 | Service, CLI, storage | Python 3.11+ with the standard library and SQLite | Process supervision, scheduler, job and session state, model adapter, permissions, event log, and CLI |
-| Dashboard | Static HTML, CSS, and JavaScript in the user's browser | In-app chat, live worker grid, event feed, viewer, and manual control. Use one maintained local HTTP server library if shipping the viewer over HTTP. |
-| Desktop runtime | Xvfb, Xauthority, one small X11 window manager, and software rendering | Launch and supervise each private display. Use X11 utilities for the spike. Consider a small helper linked to libX11 and libXtst for capture and input if that removes utility dependencies or improves latency. |
-| Isolation | Linux namespaces and cgroups through one qualified rootless runtime | Sandbox policy, guest filesystem and network setup, application templates, quotas, and result export. Evaluate rootless Podman for shipping. Use the installed Bubblewrap only for a narrower offline spike if useful. |
+| Dashboard | Plain HTML, CSS, and JavaScript with a loopback Python server | In-app prompting, live worker grid, job activity, session viewer, and manual control. |
+| Desktop runtime | Xvfb, Xauthority, i3, and software rendering | One X11 connection per private display for input and frame capture via libX11 and libXtst. The launcher ties app and display lifetimes to the service. |
+| Isolation | Rootless Bubblewrap with Linux namespaces | Private guest filesystem, D-Bus, input, profiles, and browser networking. The scheduler reserves desktop and inference slots and checks available memory. |
 | Inference | One local `llama-server` with a tested multimodal GGUF and matching projector | Thin HTTP client, per-worker context, timeout and concurrency controls, and memory-aware admission |
 | Applications | A browser and a native editor or spreadsheet app in the test image | Repeatable application templates and test fixtures. Users select supported apps at launch. |
 
-The base install needs one service, one database, one local model endpoint, and one desktop runtime. The app owns the agent loop, and the dashboard uses the browser's built-in layout and networking. Optional cloud adapters load only when configured. Standard-library HTTP is suitable for an offline prototype. The release viewer needs a maintained server and the local boundary described below. [Python HTTP server documentation](https://docs.python.org/3/library/http.server.html) · [Podman runtime documentation](https://docs.podman.io/en/stable/markdown/podman-run.1.html)
+The base install needs one service, one database, one local model endpoint, and one desktop runtime. The stdlib HTTP server is a single-user loopback interface. It uses an origin-scoped bearer, strict origin checks, and bounded requests. Reassess the HTTP layer before any deployment beyond the local machine. [Python HTTP server documentation](https://docs.python.org/3/library/http.server.html) · [Bubblewrap](https://github.com/containers/bubblewrap)
 
 Keep module boundaries small. A desktop session needs launch, observe, apply input, and stop. A model adapter needs health and capabilities, generation with images, and timeout handling. The service owns the rest. Add a second desktop runtime or model adapter after the first completes the full workflow.
 
@@ -69,7 +129,7 @@ Keep module boundaries small. A desktop session needs launch, observe, apply inp
 - The first app tier is Linux applications that can run as X11 clients in the private display while the user stays on Wayland. Validate the browser, a native editor, and LibreOffice or an equivalent spreadsheet app separately. A Wayland-only application will need a different backend. Evaluate a private Weston compositor and a scoped capture/input path after the X11 workflow works. [X.Org virtual framebuffer](https://www.x.org/X11R6/) · [Weston backends](https://wayland.pages.freedesktop.org/weston/toc/running-weston.html)
 - Display isolation keeps focus and input independent. Filesystem, device, IPC, and network isolation come from the rootless sandbox. Use disposable sessions by default. A persistent profile is explicit, gets its own storage, and has one active session at a time. Sign in manually inside the agent session when needed.
 
-An initial probe on the target host created two concurrent Xvfb displays, moved one virtual pointer while the other stayed still, rejected the wrong Xauthority credential, read framebuffer data, and cleaned up both processes. Stage 0 still needs an application-level proof covering capture, focus, clipboard and profile state, and foreground input on the actual Hyprland session.
+The pilot tests qualify separate authenticated displays, independent app input and clipboard state, Chromium profile isolation and reuse, and process cleanup after broker loss. A real native app fixture computed 6 × 7 in GNOME Calculator and read 42 from its private clipboard.
 
 ### Observation and action
 
@@ -89,21 +149,21 @@ Agent-to-agent handoff transfers a session handle and a short note through the o
 ### Jobs and dependencies
 
 - A run contains jobs with goals, dependencies, resource limits, permissions, and output expectations. A coordinator can propose a bounded plan from a natural-language request. The scheduler also accepts explicit assignments so the run can be reproduced without a planning model.
-- Start with fan-out and fan-in. Ready jobs enter a fair queue. Dependent jobs become eligible when the declared inputs are ready. Define whether a job requires every input or can proceed with available results. Record failures and incomplete inputs in the final output.
-- A worker can send a typed message or artifact reference to the coordinator or another worker in the run. Store sender, recipient, time, provenance, and a size limit. Deliver once per message ID at the application level so retries are safe. Treat the payload as task data. It cannot expand the recipient's capabilities or trigger an implicit command.
+- Ready jobs enter a fair queue. A dependent job starts after its predecessors reach a terminal state. It receives their available results and a bounded set of permitted file copies in its read-only imports folder. The results include predecessor status so a job can report partial inputs.
+- Workers send bounded messages to the coordinator or another worker in the same run. The store records sender, recipient, time, and a stable message ID. The service routes incoming messages to the addressed worker. Message content stays task data and cannot expand a worker's permissions.
 - Support explicit worker state and a separate desktop session lifecycle. A job may be queued, starting, running, paused, awaiting input, cancelling, completed, failed, cancelled, or interrupted. A desktop may be provisioning, ready, stopping, stopped, or failed. A paused or waiting job can keep window state without occupying an inference slot.
 
 ### Persistence and recovery
 
-Store runs, jobs, session references, events, model capabilities, and artifact metadata in a local SQLite database. Use monotonic event sequence numbers for ordered delivery and dashboard reconnects. Keep large screenshots and exports in a managed directory. Commit a state transition and its event together. Write artifacts to a temporary file, atomically rename them, and make the resulting reference visible only after the write completes. Sweep incomplete or unreferenced files after a crash.
+SQLite stores run and job state, messages, and artifact metadata. Each transition and its event are committed together. Events have monotonic sequence numbers for ordering. A worker's workspace stays private and selected files become downloadable after its desktop closes. The service keeps preview frames in memory. Private preview frames are available only to the current manual viewer and are excluded from the shared frame cache.
 
-Give sessions a runtime-owned identifier and manage their entire process tree. On restart, reconcile database state with actual sessions and worker ownership. Mark an interrupted action as uncertain if its previous outcome is unknown. A new observation can establish what happened before a human or safe recovery step decides whether to continue. Never promise exactly-once GUI side effects. Cancel cooperatively when possible, then terminate the session's scoped process tree after a short timeout. Clean up only resources owned by that run.
+Each session owns its display, app processes, and control connection. A launcher ties their lifetime to the service. After restart, unfinished jobs are recorded as interrupted and persisted results remain available. Interrupted GUI actions require a new run or manual inspection before a retry.
 
 ## Model serving and scheduling
 
 ### One model, multiple workers
 
-Begin with one model process and separate per-worker conversations. A shared model load lets workers take turns generating while other agents are waiting on UI or network activity. With compatible model and build settings, concurrent requests use separate context and cache slots under the same runtime. Multiple model endpoints and specialized roles can come later. They should compete under the same resource budget.
+Begin with one model process and separate per-worker conversations. A shared model load lets workers take turns generating while other agents are waiting on UI or network activity. With compatible model and build settings, concurrent requests use separate context and cache slots under the same runtime. Additional loopback models can be registered as named providers. They compete for the same local inference slots. Each offered provider uses the desktop broker or a text-only job.
 
 Use a local OpenAI-compatible inference endpoint with image support and a tested response format. `llama-server` documents multimodal input and parallel serving. A small quantized Qwen3-VL Instruct model and its matching projector are candidates. Compare a smaller and a larger quantized model using completion quality, grounding accuracy, tool format validity, latency, and memory. Pin model and projector revisions, quantization, template, and server build. A scripted model should be enough for service and input integration tests. [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) · [llama.cpp multimodal support](https://github.com/ggml-org/llama.cpp/blob/master/tools/mtmd/README.md) · [Qwen3-VL](https://github.com/QwenLM/Qwen3-VL)
 
@@ -112,31 +172,31 @@ The V100 is compute capability 7.0. For CUDA inference, qualify a build that tar
 ### Admission and throughput
 
 - Set independent caps for active desktop sessions, in-flight model calls, queued jobs, and per-run workers. Start with one inference slot and benchmark two and three on the same workload. A queued job should avoid allocating a desktop until it is ready to use one. A live desktop waiting for the next observation or for a person need not occupy a model slot.
-- Reserve host RAM and VRAM headroom. Track estimated peak memory for model weights, cache, vision inputs, and GUI processes as well as observed usage. Apply cgroup CPU, RAM, and process limits to guest sessions. GPU headroom and responsiveness depend on inference admission and measurement since ordinary CPU and memory cgroups do not cap total GPU use.
+- Reserve host RAM and VRAM headroom. Track estimated peak memory for model weights, cache, vision inputs, and GUI processes as well as observed usage. The app caps concurrent sessions and calls, and stops admitting new desktops below the RAM reserve. Strict per-guest CPU, RAM, and process quotas require further cgroup work. GPU headroom depends on model settings and admission.
 - Add backpressure at every stage. Bound screenshot size and rate, event buffers, model context, tokens, artifact bytes, and job duration. Drop stale preview frames when a viewer falls behind. Preserve durable state transitions.
 - Optimize the bottleneck found by benchmarks. Reuse current frames during stable UI states, resize screenshots for the model separately from the viewer, compact older history, and batch inference where the backend supports it. When the server is overloaded or the host is under pressure, admit less work and report what is queued. Keep per-worker cancellation responsive even if some GPU work has to finish before its slot frees.
 
 ## Optional Codex and Gemini providers
 
-Local inference powers the coordinator and all desktop workers by default. Settings offer optional connections to Codex and Gemini. The run composer shows the selected provider for each job, with a local-only setting for the entire run. A configured cloud provider may begin with text-only planning or review. It can drive a desktop only after its image input, structured action output, and cancellation have been proven with the same session broker used by local workers.
+Local inference powers the coordinator and all desktop workers by default. The service command enables optional Codex and Gemini connections. The run composer shows the selected provider for each job. Leaving every job on a local provider keeps inference local. A configured cloud provider may begin with text-only planning or review. It can drive a desktop only after its image input, structured action output, and cancellation have been proven with the same session broker used by local workers.
 
 | Provider | Connection and scope |
 | --- | --- |
 | Local | Use the configured local model endpoint for planning, desktop work, and review. The complete workflow works offline. |
-| Codex | Evaluate OpenAI's documented **Sign in with ChatGPT** flow for eligible ChatGPT plans and use the official Codex app-server integration over stdio. Verify plan access with a completed inference turn. OpenAI's plan-usage preview supports image input on compatible models and has no hosted computer-use tool. Any desktop actions must go through our own broker. [OpenAI sign-in guide](https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt) · [Codex app-server integration](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) · [Preview limits](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations) |
+| Codex | Connect eligible ChatGPT accounts through **Sign in with ChatGPT**. The pilot uses the documented direct plan-usage Responses transport for text planning and review. Plan usage requires a completed inference turn for verification. [OpenAI sign-in guide](https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt) · [ChatGPT plan inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) · [Preview limits](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations) |
 | Gemini | Use a user-provided Gemini Developer API key and the user's Google Cloud project for API quota and billing. Eligible Google AI Pro or Ultra developer credits may apply to that project's Gemini API usage after activation. Consumer Antigravity login and CLI quota cannot be used as an embedded provider under Google's current terms. [Google Antigravity FAQ](https://antigravity.google/docs/faq) · [Google developer benefits](https://developers.google.com/profile/help/benefits?hl=en) · [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) |
 
 - Display the provider, whether work leaves the machine, and whether the connection uses plan allowance or API billing. An enabled cloud worker can receive only the prompt, history, screenshots, or artifacts explicitly allowed for that job. A settings connection alone grants no access to a run. Local-only remains in force on retries, handoffs, and worker messages.
 - Keep credentials in the host service's private credential store or the provider's documented integration. Guests and the dashboard receive connection status only. Revoke or refresh credentials through the provider's documented flow. Surface sign-in, quota, and connection errors in the worker's tile.
-- Give cloud calls separate concurrency and usage budgets. If a provider becomes unavailable, pause or fail its jobs and offer an explicit reassignment. The app never automatically sends a local job or its data to a cloud service. Keep app-server execution scoped and route any supported app tools through the same capability checks as local workers.
+- Cloud calls have distinct concurrency slots and use the selected account's quota or API billing. A provider error stays with that worker. Start a new job explicitly to change providers. Desktop actions use the same input broker.
 
 ## Prompting and live worker grid
 
 - **Prompting** happens in the same view as the grid. Start a run with a prompt and optional worker count. Expand the composer to edit assignments, apps, limits, and providers. After launch, follow the conversation and send a follow-up to the coordinator or a selected worker. The recipient is visible before sending, and the message appears in that run's history.
 - **Live worker grid** is the default run view. An automatic layout chooses rows and columns for the viewport and worker count. A manual mode can pin an **N × M** layout, with scrolling when the run exceeds the visible grid. Tile positions stay stable as statuses change. Each worker has its own updating, aspect-ratio-correct preview, current task, provider, last action, and input owner. Queued workers get placeholders, paused workers show their last frame, and completed workers show a result. An all-runs view can show every active worker with its run identified.
-- **Session viewer** opens a bigger view of one worker inside the app. This view allows explicit manual control, while the grid tiles are available for monitoring. Start with sampled frames and a shared server-sent event stream for status, using ordinary requests for commands. Budget bandwidth across the grid and give the selected worker a higher preview rate. Coalesce old frames, indicate stale or private previews, and release manual capture on disconnect. Add video streaming only if sampled previews fail the measured latency target.
+- **Session viewer** opens a bigger view of one worker inside the app. This view allows explicit manual control, while the grid tiles are available for monitoring. Sample the visible tiles and poll state with conditional HTTP requests. Use a faster sampling rate for the selected desktop and ordinary requests for commands. Budget bandwidth across the grid and give the selected worker a higher preview rate. Coalesce old frames, indicate stale or private previews, and release manual capture on disconnect. Add video streaming only if sampled previews fail the measured latency target.
 - **Intervention** supports pausing a worker, taking over one session, supplying input, and returning control. A reconnect shows the current owner. A lost viewer releases its control lease and leaves the agent paused until the user resumes it. A stop-all command is available from the dashboard and CLI while the queue or model is busy.
-- **Timeline and notifications** identify who acted, what the app action did, when a handoff happened, and where the result came from. Show recoverable errors and timeouts. Offer passive desktop notifications for completed runs or decisions, with a link to the run. Support keyboard navigation and text status independent of color or motion. [Desktop Notification Specification](https://specifications.freedesktop.org/notification/latest/)
+- **Timeline and notifications** identify who acted, what the app action did, when a handoff happened, and where the result came from. Show recoverable errors and timeouts. Offer passive desktop notifications for completed runs or decisions, without shifting focus. The dashboard supports keyboard navigation and text status independent of color or motion. [Desktop Notification Specification](https://specifications.freedesktop.org/notification/latest/)
 
 ## Data, permissions, and packaging
 
@@ -144,9 +204,9 @@ Local inference powers the coordinator and all desktop workers by default. Setti
 
 - Keep the service and model on the host. Guests have their own display and bus and access only the files and devices they need. Exclude the host's display sockets, user D-Bus, keyring, personal home, and GPU devices from guest sessions by default. Give the bridge only the capabilities its protocol requires.
 - Run first demos with synthetic content and no access to the public internet. Before enabling public browsing, qualify rootless process and filesystem isolation, guest network routing, and denial of host-private services. Use a narrowly configured test network for fixtures. Public tasks must run within their permitted destinations and credentials. Use explicit review for actions such as buying, sending messages, uploading files, or changing account settings where the workflow supports enforceable tool-level controls. A pixel-based controller cannot reliably infer every click's external effect, so qualify limited task surfaces first.
-- Treat page text, app content, downloads, and agent messages as untrusted. Keep policy decisions in the service. Escape page- or model-derived text in the dashboard. Do not render it as privileged HTML. Make sensitive input happen in the viewer under user control. Omit typed secrets, cookies, and authorization headers from logging. Offer a private viewing mode that suppresses capture and recording during sensitive entry.
+- Treat page text, app content, downloads, and agent messages as untrusted. Keep policy decisions in the service. Escape page- or model-derived text in the dashboard. Do not render it as privileged HTML. Make sensitive input happen in the viewer under user control. Omit typed secrets, cookies, and authorization headers from logging. For sensitive entry, Private view restricts live frames to the manual owner and blocks model observation until the user ends it.
 - Keep the CLI on a user-private local socket where practical. Bind the viewer to loopback and authenticate it with a short-lived launch credential and a session. Check Host and Origin, protect mutating requests against cross-origin calls, and bound request size, duration, and connections. Keep the dashboard and model server unreachable from guest workloads. Serve only named app assets and authorized run artifacts.
-- Import pinned input copies or specifically scoped read-only files. Export verified files into a chosen destination through the service. Validate path containment and file size, use atomic publication, and define collision behavior. Use per-run retention for screenshots, messages and artifacts, with on-demand purge. Use XDG locations to separate configuration, persistent state, caches, and transient sockets. [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/)
+- Copy explicitly selected input files into read-only guest imports. Serve bounded downloads from regular files in that job's workspace. The user can explicitly prune completed history, copied inputs, and workspace outputs while the service is stopped. Use XDG locations to separate configuration, persistent state, caches, and transient sockets. [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/)
 
 ### Install and operate
 
@@ -195,4 +255,22 @@ Use scripted workers to isolate runtime overhead, then repeat with the model. Th
 | Preview transport and input helper | Measure manual-control latency, screenshot CPU cost and viewer throughput. Keep the simpler approach while it meets the measured budgets. |
 | Packaging and license | Pick a distribution package, project license, and application image/update policy before the workstation pilot is distributed. |
 
-The first development target is stage 0. Its proof is two offscreen desktops showing independent application state, independent input, and clean teardown while the foreground desktop remains available.
+### Verification on the first workstation
+
+- Offline orchestration exercised two concurrent sandboxed browsers feeding a native editor that saved a verified shortlist. Session, provider, HTTP, file, and recovery tests include cancellation, stale ownership, and handoff of an already-open desktop.
+- The Chromium smoke test drives the real app. It checks concurrent live frames, fixed-grid overflow, bearer auth and reload, manual control, follow-ups, cancellation, export, and the narrow layout.
+- On the V100, Qwen3-VL-2B read a real 640 × 480 editor frame in 277 ms, then completed a guided type-and-save task in 1.32 s including desktop startup. The successful test verified the exported file bytes. Less guided catalog and editing attempts produced incorrect results or asked for input.
+- The persistent X11 connection reduced median 1024 × 768 PNG capture from 39.5 ms to 6.0 ms in a 30-sample host test. Median synthetic pointer input dropped from 31.6 ms to 0.2 ms. A browser, editor, and calculator used about 648 MiB aggregate PSS in one mixed workload. Hyprland focus and clipboard stayed unchanged during the mixed run, and the host cursor stayed fixed across 96 separately sampled guest actions.
+- Warmed tiny-image throughput was 9.15, 12.09, and 14.59 requests/s at one, two, and three slots, respectively, with 36 of 36 correct responses and about 8 GiB sampled device usage. These are inference comparisons. End-to-end desktop task rates depend on visual grounding, tools, and app latency.
+
+```sh
+python3 -m unittest discover -s tests
+LCU_TEST_DESKTOP=1 python3 -m unittest discover -s tests
+node tests/ui_smoke.mjs
+```
+
+Use the optional `codex-auth` extra to exercise signed OAuth fixtures. From the repository root, see `python3 -m scripts.bench_local --help` for the local model experiment. No model weights or account credentials are stored in this repository.
+
+### Scope still to qualify
+
+Native Wayland-only applications, strict per-guest cgroup quotas, foreground latency under sustained background load, and live Codex and Gemini account usage need separate qualification. Firefox and LibreOffice are outside the tested workstation matrix. Browser networking was tested against a local fixture. The small default model needs further accuracy testing on open-ended browsing and multi-step desktop tasks. The repository is public and a distribution license is still to be selected.
